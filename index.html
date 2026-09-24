@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>¡Suelta, Gato!</title>
+<meta name="description" content="Plataformas arcade: rescata a tu amig@ de las garras de Don Bigotes por toda España.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+<style>
+  :root { color-scheme: dark; --ground: #0c0818; --frame: #2a1f45; --glow: #ff8a3a; }
+  html, body { height: 100%; margin: 0; background: var(--ground); overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #game {
+    display: block; image-rendering: pixelated; image-rendering: crisp-edges;
+    background: #000; box-shadow: 0 0 0 3px var(--frame), 0 0 48px rgba(255, 138, 58, 0.18);
+    width: min(100vw, calc(100vh * 640 / 360));
+    height: min(100vh, calc(100vw * 360 / 640));
+  }
+  /* efecto CRT suave */
+  .scan { position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.12) 2px 3px); mix-blend-mode: multiply; }
+  @media (prefers-reduced-motion: reduce) { .scan { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="game" width="640" height="360" tabindex="0" aria-label="Juego ¡Suelta, Gato!"></canvas>
+<div class="scan"></div>
+<script src="js/sprites.js"></script>
+<script src="js/elements.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/fondos.js"></script>
+<script src="js/art.js"></script>
+<script src="js/level.js"></script>
+<script src="js/game.js"></script>
+<script>document.getElementById('game').focus();</script>
+</body>
+</html>
