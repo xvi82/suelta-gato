@@ -1,5 +1,5 @@
 // ============================================================
-//  ¡SUELTA, GATO!  -  motor del juego
+//  ¡SUELTA, MACHIN!  -  motor del juego
 // ============================================================
 (() => {
   'use strict';
@@ -29,7 +29,7 @@
   const Input = (() => {
     const KEYS = {
       ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down',
-      Space: 'jump', KeyZ: 'jump', KeyX: 'punch', KeyJ: 'punch', KeyC: 'kick', KeyK: 'kick', KeyV: 'throw', KeyL: 'throw',
+      Space: 'jump', KeyZ: 'jump', KeyH: 'jump', KeyI: 'jump', KeyX: 'punch', KeyJ: 'punch', KeyC: 'kick', KeyK: 'kick', KeyV: 'throw', KeyL: 'throw',
       Enter: 'start', KeyP: 'start', Escape: 'back', KeyM: 'mute', KeyF: 'full', Backspace: 'back',
     };
     const ACTIONS = ['left', 'right', 'up', 'down', 'jump', 'punch', 'kick', 'throw', 'start', 'back', 'mute', 'full'];
@@ -448,7 +448,7 @@
       case 'cocido': P.cocido = true; addScore(1000); Sound.sfx.power(); break;
       case 'cafe': P.fastT = CAFE_T; addScore(1000); Sound.sfx.power(); break;
     }
-    const info = ITEM_INFO[it.type]; if (info) showBanner(it.type, info[0], info[1].replace('{K}', Input.pad ? 'Y (mando)' : 'V'));
+    const info = ITEM_INFO[it.type]; if (info) showBanner(it.type, info[0], info[1].replace('{K}', Input.pad ? 'Y (mando)' : 'V o L'));
     parts(cx, cy, 16, ['#ffe066', '#ffffff', '#ff8ab0'], { sp: 3, up: 4 });
   }
   function updateItem(it) {
@@ -2021,7 +2021,7 @@
     const bounce = Math.sin(G.t * 0.05) * 3;
     ctx.save(); ctx.translate(W / 2, y + bounce);
     txt('¡SUELTA,', 0, 0, { size: 32, align: 'center', col: '#ffe066', sh: '#7a2a10' });
-    txt('GATO!', 0, 38, { size: 32, align: 'center', col: '#ff8a3a', sh: '#7a2a10' });
+    txt('MACHIN!', 0, 38, { size: 32, align: 'center', col: '#ff8a3a', sh: '#7a2a10' });
     ctx.restore();
   }
   function drawCover(img) { const k = Math.max(W / img.width, H / img.height); ctx.imageSmoothingEnabled = true; ctx.drawImage(img, (W - img.width * k) / 2, (H - img.height * k) / 2, img.width * k, img.height * k); ctx.imageSmoothingEnabled = false; }
@@ -2035,7 +2035,7 @@
       txt('Una aventura de puñetazos, chanclas y pesetas', W / 2, 102, { align: 'center', col: '#ffffff' });
       if (G.t % 70 < 48) txt('PULSA ENTER O START', W / 2, 124, { size: 16, align: 'center', col: '#ffe066' });
       ctx.fillStyle = 'rgba(12,8,24,0.72)'; ctx.fillRect(0, H - 22, W, 22);
-      const lines = ['TECLADO: FLECHAS mover  ABAJO agacharse  ESPACIO saltar  X puño  C patada  V lanzar', 'MANDO: ABAJO agacharse  A saltar  X puño  B patada  Y/RB lanzar  START pausa'];
+      const lines = ['FLECHAS/WASD  ABAJO agacharse  ZXCV/HJKL: saltar, puño, patada, lanzar', 'MANDO: ABAJO agacharse  A saltar  X puño  B patada  Y/RB lanzar  START pausa'];
       txt(lines[Math.floor(G.t / 240) % 2], W / 2, H - 15, { align: 'center', col: Math.floor(G.t / 240) % 2 ? '#8affff' : '#ffffff' });
       txt('RÉCORD ' + String(G.hi).padStart(7, '0'), W - 8, 6, { align: 'right', col: '#ff8ab0' });
       return;
@@ -2049,8 +2049,8 @@
     drawChar('cat', IDLE[Math.floor(G.t / 14) % 4], 320, 258, 1, 1.05);
     if (G.t % 70 < 48) txt('PULSA ENTER O START', W / 2, 134, { size: 16, align: 'center', col: '#ffe066' });
     box(96, 296, 448, 58, '#1b1426', '#ffe066');
-    txt('TECLADO  FLECHAS/WASD mover  ABAJO agacharse  ESPACIO/Z saltar', W / 2, 304, { align: 'center', col: '#ffffff' });
-    txt('X puño  C patada  V lanzar  ENTER pausa  M música', W / 2, 318, { align: 'center', col: '#ffffff' });
+    txt('FLECHAS/WASD mover   ABAJO agacharse', W / 2, 304, { align: 'center', col: '#ffffff' });
+    txt('ZXCV o HJKL: saltar, puño, patada, lanzar', W / 2, 318, { align: 'center', col: '#ffffff' });
     txt('MANDO  A saltar  X puño  B patada  Y/RB lanzar', W / 2, 334, { align: 'center', col: '#8affff' });
     txt('RÉCORD ' + String(G.hi).padStart(7, '0'), W - 8, 6, { align: 'right', col: '#ff8ab0' });
   }
@@ -2111,9 +2111,13 @@
   }
 
   // --- historia inicial
+  const KIDNAP_CAT = [
+    '¡MIAU! ¡Soy MACHÍN, pero llámame Machingán! ¡Me aburro! ¡Me llevo a {C}!',
+    "Por vuestra culpa ya no soy el 'Principesco'",
+  ];
   function startStory() {
     G.state = 'story'; G.t = 0; Sound.play('title');
-    S = { t: 0, catY: -160, catX: 430, catVy: 0, cageY: -120, bx: 520, by: -200, cageX: 300, carried: false, shake: 0 };
+    S = { t: 0, catY: -160, catX: 430, catVy: 0, cageY: -120, bx: 520, by: -200, cageX: 300, carried: false, shake: 0, catLine: fill(pick(KIDNAP_CAT), G.C) };
   }
   function updateStory() {
     const s = S; G.t++;
@@ -2156,7 +2160,7 @@
     // bocadillos
     const say = (x, y, str) => { const fake = { target: { anchor: () => ({ x, y }) }, text: str, t: 10, dur: 99 }; const cam = L; L = { camX: 0, camY: 0 }; drawBubble(fake, 1); L = cam; };
     if (s.t > 30 && s.t < 110) say(300, gy - 72, '¡Qué buen día de playa!');
-    if (s.t > 150 && s.t < 240) say(430, gy - 130, fill('¡MIAU! ¡Soy MACHÍN, pero llámame Machingán! ¡Me aburro! ¡Me llevo a {C}!', G.C));
+    if (s.t > 150 && s.t < 240) say(430, gy - 130, s.catLine);
     if (s.t > 250 && s.t < 330) say(300, gy - 100, '¡Eeeh! ¡Suéltame, bicho peludo!');
     if (s.t > 470 && s.t < 620) say(220, gy - 72, fill('¡{C}! ¡Espera, que voy!', G.C));
     ctx.restore();
@@ -2235,7 +2239,7 @@
     ['CONTINUAR', 'MÚSICA: ' + (Sound.musicOn ? 'SÍ' : 'NO'), 'EFECTOS: ' + (Sound.sfxOn ? 'SÍ' : 'NO'), 'SALIR AL TÍTULO'].forEach((o, i) => {
       txt((G.menu === i ? '> ' : '  ') + o, 210, 126 + i * 22, { col: G.menu === i ? '#ffe066' : '#ffffff' });
     });
-    txt('ABAJO agacharse  X/J puño  C/K patada  V/L lanzar', W / 2, 228, { align: 'center', col: '#8affff' });
+    txt('ZXCV o HJKL: saltar, puño, patada, lanzar', W / 2, 228, { align: 'center', col: '#8affff' });
     txt('Pisa a los bichos (¡menos erizos', W / 2, 246, { align: 'center', col: '#c8c8e0' });
     txt('y medusas, que pican!)', W / 2, 258, { align: 'center', col: '#c8c8e0' });
     txt('F pantalla completa   M música', W / 2, 272, { align: 'center', col: '#8a8aa8' });
