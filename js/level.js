@@ -181,7 +181,7 @@ const Level = (() => {
         for (let i = 0; i < 4; i++) { tiles[pr][s + 3 + i] = PLAT; coin(s + 3 + i, pr - 1); }
         hot.push({ col: s + 5, row: pr - 2 });
       },
-      // tubería (o alcantarilla) que lleva a la sala secreta: una por nivel
+      // entrada a la sala secreta (cubo, bota, hoyo de golf... según el sitio): una por nivel
       tuberia() {
         const n = ri(7, 9), s = c; flat(n);
         if (pipe) return;

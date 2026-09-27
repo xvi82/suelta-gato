@@ -1217,37 +1217,151 @@
     ctx.fillStyle = 'rgba(255,190,120,0.55)'; ctx.fillRect(o.x - 6, o.y - hh * 0.9, 12, hh * 0.9);
     ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.beginPath(); ctx.ellipse(o.x, o.y - hh, 18, 8, 0, 0, Math.PI * 2); ctx.fill();
   }
-  // tubería (verde; en Madrid, alcantarilla gris) con boca donde da al aire
-  function drawPipeTile(c, r) {
-    const kind = L.loc.painter === 'madrid' ? 'obj_alcantarilla_' : 'obj_tubo_';
-    if (elem(kind + 'boca')) {
-      const at = (cc, rr) => (rr < 0 || rr >= ROWS || cc < 0 || cc >= L.cols) ? BLOCK : L.tiles[rr][cc];
-      if (at(c - 1, r) === PIPE || at(c, r - 1) === PIPE) return; // se dibuja una vez por tubería
-      let r1 = r; while (at(c, r1 + 1) === PIPE) r1++;
-      const up = !isSolidTile(at(c, r - 1)), x = c * T - 2, w = 2 * T + 4, top = r * T, bot = (r1 + 1) * T;
-      const im = elem(kind + (up ? 'boca' : 'base')), ih = im.height / Z * w / (im.width / Z);
-      ctx.save(); ctx.beginPath(); ctx.rect(x - 4, up ? top - 6 : top, w + 8, bot - top + (up ? 6 + T : 6)); ctx.clip();
-      spr(im, x, up ? top + 4 : bot + 3 - ih, w, up ? Math.max(ih, bot - top + 8) : ih);
-      ctx.restore();
-      return;
-    }
-    const pal = L.loc.painter === 'madrid' ? ['#8a93a8', '#d0d8e8', '#4a5268'] : ['#3aa04a', '#9ae88a', '#1f6a2a'];
-    const at = (cc, rr) => (rr < 0 || rr >= ROWS || cc < 0 || cc >= L.cols) ? BLOCK : L.tiles[rr][cc];
-    const left = at(c - 1, r) !== PIPE, right = at(c + 1, r) !== PIPE;
-    const open = t => t !== PIPE && !isSolidTile(t);
-    const x = c * T, y = r * T, x0 = x + (left ? 3 : 0), x1 = x + T - (right ? 3 : 0);
-    ctx.fillStyle = '#1b1426'; ctx.fillRect(x0, y, x1 - x0, T);
-    ctx.fillStyle = pal[0]; ctx.fillRect(x0 + (left ? 2 : 0), y, x1 - x0 - (left ? 2 : 0) - (right ? 2 : 0), T);
-    if (left) { ctx.fillStyle = pal[1]; ctx.fillRect(x0 + 5, y, 4, T); }
-    if (right) { ctx.fillStyle = pal[2]; ctx.fillRect(x1 - 9, y, 5, T); }
-    for (const [on, ly] of [[open(at(c, r - 1)), y], [open(at(c, r + 1)), y + T - 10]]) {
-      if (!on) continue;
-      ctx.fillStyle = '#1b1426'; ctx.fillRect(x, ly, T, 10);
-      ctx.fillStyle = pal[0]; ctx.fillRect(x + (left ? 2 : 0), ly + 2, T - (left ? 2 : 0) - (right ? 2 : 0), 6);
-      if (left) { ctx.fillStyle = pal[1]; ctx.fillRect(x + 5, ly + 2, 4, 6); }
-      if (right) { ctx.fillStyle = pal[2]; ctx.fillRect(x + T - 8, ly + 2, 5, 6); }
+  // Entrada a la sala secreta: en cada sitio, algo de allí por donde colarse (nada de tuberías).
+  // Se dibuja de pie con la boca arriba; la del techo de la sala es la misma, boca abajo.
+  const PO = '#1b1426', HOLE = '#0e0a16';
+  function fr(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); }
+  const shade = (i, m, p) => i < 3 ? p[0] : i >= m - 4 ? p[2] : p[1];
+  // cuerpo con contorno: ins(j) = sangría de la fila j; col(i, j, m) = color de la columna interior i (de m)
+  function body(x, y, w, h, ins, col) {
+    for (let j = 0; j < h; j++) {
+      const a = Math.round(ins(j)), x0 = x + a, n = w - 2 * a, m = n - 2;
+      fr(x0, y + j, n, 1, PO);
+      if (j === h - 1 || m <= 0) continue;
+      let s = 0, c = col(0, j, m);
+      for (let i = 1; i <= m; i++) { const c2 = i < m ? col(i, j, m) : null; if (c2 !== c) { fr(x0 + 1 + s, y + j, i - s, 1, c); s = i; c = c2; } }
     }
   }
+  // borde de la boca con su agujero
+  function rim(x, y, w, h, p, hole = HOLE) {
+    fr(x + 1, y, w - 2, h, PO); fr(x, y + 1, w, h - 2, PO);
+    fr(x + 1, y + 1, w - 2, h - 2, p[1]); fr(x + 2, y + 1, w - 4, 1, p[0]); fr(x + 1, y + h - 2, w - 2, 1, p[2]);
+    fr(x + 4, y + 2, w - 8, Math.max(2, h - 5), hole);
+  }
+  const smoke = (x, y, t, col) => {
+    for (let k = 0; k < 3; k++) {
+      const f = ((t + k * 40) % 120) / 120;
+      ctx.globalAlpha = 0.5 * (1 - f); ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(x + Math.sin(f * 6 + k) * 4, y - f * 36, 3 + f * 6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  };
+  const PIPE_ART = {
+    // Las Canteras: cubo de playa gigante
+    laspalmas(x, y, w, h, t, hang) {
+      const P = ['#ff8a7a', '#e8413a', '#a82a2a'];
+      body(x + 3, y + 5, w - 6, h - 5, j => j * 0.12, (i, j, m) => shade(i, m, P));
+      fr(x - 1, y + 9, 4, 5, PO); fr(x, y + 10, 2, 3, '#ffd23a'); fr(x + w - 3, y + 9, 4, 5, PO); fr(x + w - 2, y + 10, 2, 3, '#ffd23a');
+      rim(x + 1, y, w - 2, 8, ['#fff09a', '#ffd23a', '#c89a10']);
+      fr(x + 6, y + 3, 5, 1, '#f5d98a'); fr(x + w - 14, y + 3, 7, 1, '#f5d98a');
+      if (hang) return;
+      const sx = x + w / 2, sy = y + 24; // estrella de mar pintada
+      fr(sx - 1, sy - 6, 3, 13, '#ffe070'); fr(sx - 6, sy - 1, 13, 3, '#ffe070'); fr(sx - 3, sy - 3, 7, 7, '#ffe070'); fr(sx, sy, 1, 1, '#c89a10');
+    },
+    // Cádiz: bota de vino de Jerez, de pie
+    cadiz(x, y, w, h, t, hang) {
+      const P = ['#c8864a', '#9a5a2a', '#6a3a1a'], hoop = ['#8a8a98', '#4a4a58', '#2a2a34'];
+      const H = h - 5, hj = [3, 4, Math.round(H / 2), H - 6, H - 5];
+      body(x + 1, y + 5, w - 2, H, j => 4 - 4 * Math.sin(Math.PI * j / H),
+        (i, j, m) => hj.includes(j) ? shade(i, m, hoop) : i % 8 === 7 ? P[2] : shade(i, m, P));
+      rim(x + 5, y, w - 10, 7, ['#b87a42', '#7a4a22', '#4a2a12']);
+      if (!hang) { fr(x + 18, y + 18, 2, 7, '#f4efdc'); fr(x + 20, y + 18, 3, 2, '#f4efdc'); fr(x + 20, y + 21, 3, 2, '#f4efdc'); fr(x + 23, y + 19, 1, 2, '#f4efdc'); // «PX» a tiza
+        fr(x + 27, y + 18, 2, 2, '#f4efdc'); fr(x + 29, y + 20, 2, 2, '#f4efdc'); fr(x + 31, y + 18, 2, 2, '#f4efdc'); fr(x + 27, y + 22, 2, 2, '#f4efdc'); fr(x + 31, y + 22, 2, 2, '#f4efdc'); }
+    },
+    // Sotogrande: hoyo de golf en un green elevado
+    sotogrande(x, y, w, h, t, hang) {
+      const G = ['#a0f080', '#5ac04a', '#3a9a3a'], D = ['#b88a5a', '#9a6a3a', '#7a5028'];
+      body(x, y + 5, w, h - 5, () => 0, (i, j, m) => j < 4 ? (Math.floor(i / 8) % 2 ? G[1] : G[0]) : j === 4 ? G[2] : (i * 7 + j * 13) % 29 === 0 ? D[2] : shade(i, m, D));
+      rim(x, y, w, 8, G, HOLE);
+      fr(x + 4, y + 2, w - 8, 1, '#f4efdc'); // copa blanca del hoyo
+      if (hang) return;
+      const px = x + w - 3, wave = Math.round(Math.sin(t * 0.15) * 1.5); // bandera hacia fuera, que no la tapen las monedas
+      fr(px - 1, y - 28, 3, 32, PO); fr(px, y - 27, 1, 30, '#ffffff');
+      const cols = [...Array(7)].map((_, k) => [px + 2 + k * 2, y - 27 + (k * 0.7 | 0) + (k > 3 ? wave : 0), Math.max(1, (10 - k * 1.4) | 0)]);
+      for (const [fx, fy, fh] of cols) fr(fx, fy - 1, 3, fh + 2, PO);
+      for (const [fx, fy, fh] of cols) fr(fx, fy, 2, fh, '#e8413a');
+      fr(x + 6, y + 1, 4, 3, PO); fr(x + 7, y + 1, 2, 2, '#ffffff'); // bola
+    },
+    // Madrid: buzón amarillo de Correos
+    madrid(x, y, w, h, t, hang) {
+      const Y = ['#fff08a', '#ffd200', '#c89a00'];
+      fr(x + 8, y + h - 4, 8, 4, PO); fr(x + w - 16, y + h - 4, 8, 4, PO);
+      body(x + 4, y + 6, w - 8, h - 9, () => 0, (i, j, m) => j === 8 ? Y[2] : shade(i, m, Y));
+      rim(x + 1, y, w - 2, 8, Y);
+      if (hang) return;
+      const cx = x + w / 2, cy = y + 27;
+      ctx.fillStyle = PO; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#1a3a8a'; ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
+      fr(cx - 4, cy - 1, 7, 3, '#ffd200'); fr(cx + 2, cy - 3, 2, 7, '#ffd200'); fr(cx - 5, cy - 2, 2, 2, '#ffd200'); // corneta
+    },
+    // Parque Warner: cubo de palomitas gigante
+    warner(x, y, w, h, t, hang) {
+      body(x + 3, y + 7, w - 6, h - 7, j => j * 0.1, (i, j, m) => {
+        const red = Math.floor(i / 7) % 2 === 0, dk = i >= m - 4;
+        return red ? (dk ? '#a02020' : '#e03030') : (dk ? '#d8c8c0' : '#fff4e8');
+      });
+      rim(x + 1, y + 3, w - 2, 7, ['#ff8080', '#e03030', '#a02020']);
+      const pop = [[4, 3], [9, 1], [14, 3], [w - 15, 2], [w - 10, 0], [w - 5, 3], [7, 5], [w - 8, 5]];
+      for (const [dx, dy] of pop) {
+        ctx.fillStyle = PO; ctx.beginPath(); ctx.arc(x + dx, y + dy + 2, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff6c8'; ctx.beginPath(); ctx.arc(x + dx, y + dy + 2, 3, 0, Math.PI * 2); ctx.fill();
+        fr(x + dx - 1, y + dy + 1, 1, 1, '#ffd23a');
+      }
+    },
+    // Siam Park: tinaja tailandesa llena de agua
+    siam(x, y, w, h, t, hang) {
+      const P = ['#7ae0e0', '#1aa0a8', '#0a6a78'], Au = ['#fff0a0', '#ffc840', '#c08a10'], H = h - 6;
+      body(x + 1, y + 6, w - 2, H, j => 1 + 5 * Math.pow(Math.abs(1 - 2 * j / H), 2), (i, j, m) => {
+        if (j === 3 || j === H - 5) return shade(i, m, Au);
+        const k = j - Math.round(H / 2) + 2;
+        if (!hang && k >= 0 && k < 4 && ((i + k) % 8 < 2 || (i - k + 80) % 8 < 2)) return Au[1];
+        return shade(i, m, P);
+      });
+      rim(x + 3, y, w - 6, 8, Au, '#0a3a6a');
+      for (let k = 0; k < 3; k++) fr(x + 8 + ((t / 3 + k * 13) % (w - 22)), y + 3 + (k % 2), 4, 1, '#8ae8ff');
+    },
+    // El Teide: hornito volcánico humeante
+    teide(x, y, w, h, t, hang) {
+      const R = ['#9a6a5a', '#6a4a3e', '#3a2a28'], H = h - 4;
+      body(x - 2, y + 4, w + 4, H, j => 9 - j * 9 / H, (i, j, m) => (i * 7 + j * 13) % 23 === 0 ? '#2a1e1c' : shade(i, m, R));
+      const glow = t % 20 < 10 ? '#ff8a2a' : '#ffb040';
+      rim(x + 5, y, w - 10, 7, R, glow);
+      fr(x + 12, y + 3, w - 24, 1, '#ffe070');
+      fr(x + 20, y + 7, 3, 6, '#ff6a1a'); fr(x + 21, y + 13, 2, 3, '#ff8a2a'); // colada
+      if (!hang) smoke(x + w / 2, y - 2, t, '#9a8a88');
+    },
+    // Andorra: chimenea de chalet con nieve
+    andorra(x, y, w, h, t, hang) {
+      const B = ['#d06a4a', '#b04a30', '#7a3020'];
+      body(x + 3, y + 8, w - 6, h - 8, () => 0, (i, j, m) => j % 6 === 5 || (i + (Math.floor(j / 6) % 2) * 6) % 12 === 11 ? '#d8c8b8' : shade(i, m, B));
+      rim(x, y + 3, w, 7, ['#d0d0dc', '#9a9aa8', '#6a6a78']);
+      fr(x + 1, y + 1, w - 2, 3, PO); fr(x + 2, y, w - 4, 2, PO); fr(x + 2, y + 1, w - 4, 2, '#ffffff'); fr(x + 4, y + 5, w - 8, 3, HOLE);
+      for (const dx of [6, 15, w - 12]) { fr(x + dx, y + 10, 3, 4, PO); fr(x + dx + 1, y + 10, 1, 3, '#e0f4ff'); } // carámbanos
+      if (!hang) smoke(x + w / 2, y + 2, t, '#e8eef4');
+    },
+  };
+  function drawPipeTile(c, r) {
+    const at = (cc, rr) => (rr < 0 || rr >= ROWS || cc < 0 || cc >= L.cols) ? BLOCK : L.tiles[rr][cc];
+    if (at(c - 1, r) === PIPE || at(c, r - 1) === PIPE) return; // se dibuja una vez por entrada
+    let r1 = r; while (at(c, r1 + 1) === PIPE) r1++;
+    const up = !isSolidTile(at(c, r - 1)), x = c * T - 2, w = 2 * T + 4, top = r * T, bot = (r1 + 1) * T;
+    const painter = PIPE_ART[L.loc.painter] ? L.loc.painter : 'laspalmas', t = G.t || 0;
+    ctx.save();
+    if (!up) { ctx.translate(0, top + bot); ctx.scale(1, -1); } // la del techo: boca abajo
+    const im = elem('obj_entrada_' + painter);
+    if (im) {
+      // sprite del lote 8: la altura de su boca (LIP) queda a ras de la casilla de arriba
+      const iw = im.width / Z, ih = im.height / Z, lip = PIPE_LIP[painter];
+      let k = (2 * T + 2) / ((1 - lip) * ih); if (iw * k > 64) k = 64 / iw;
+      const sw = iw * k, sh = ih * k, sy = top + 2 * T + 2 - sh;
+      if (!up) { ctx.beginPath(); ctx.rect(x - 20, sy - 10, w + 40, bot - sy + 10); ctx.clip(); }
+      spr(im, x + w / 2 - sw / 2, sy, sw, sh);
+      if (up && (painter === 'teide' || painter === 'andorra')) smoke(x + w / 2, top - 2, t, painter === 'teide' ? '#9a8a88' : '#e8eef4');
+    } else PIPE_ART[painter](x, top, w, bot - top, t, !up);
+    ctx.restore();
+  }
+  // altura relativa (0 = arriba del sprite) de la boca por donde se entra
+  const PIPE_LIP = { laspalmas: 0.12, cadiz: 0.1, sotogrande: 0.32, madrid: 0.1, warner: 0.14, siam: 0.1, teide: 0.2, andorra: 0.16 };
   // bloque de azulejo con el botijo mágico; los puntitos son los usos que le quedan
   function drawBotijoTile(c, r, y, spent) {
     const x = c * T, used = L.botijo[c + ',' + r] || 0, b0 = elem('obj_botijo', 0);

@@ -474,10 +474,16 @@ const cells = (g, r, cs, fix = p => p, bg = SHEET) => cs.map(c => trim(fix(prep(
     addPoses('obj_tabla', cells(g, 0, [0, 1, 2]), 72, 'w', 0);
     addPoses('obj_metal', cells(g, 1, [0, 1]), 108, 'w', 0);
     addPoses('obj_muelle', cells(g, 2, [0, 1, 2]), 40, 'h');
-    ['tubo_boca', 'tubo_cuerpo', 'tubo_base', 'alcantarilla_boca', 'alcantarilla_cuerpo', 'alcantarilla_base'].forEach((name, c) => addPoses('obj_' + name, cells(g, 3, [c]), 72, 'w'));
+    // fila 3 (tuberías y alcantarillas): ya no se usa, la sustituye el lote 8
     addPoses('obj_botijo', cells(g, 4, [0, 1, 2, 3]), 40, 'w', 0);
     addPoses('obj_golf', cells(g, 5, [0, 1]), 110, 'h', 0);
   }
+}
+{
+  // entradas a la sala secreta, una por sitio (mismo orden que LOCATIONS)
+  const g = gridSheet('lote 8.png', 4, 2);
+  if (g) ['laspalmas', 'cadiz', 'sotogrande', 'madrid', 'warner', 'siam', 'teide', 'andorra']
+    .forEach((name, i) => addPoses('obj_entrada_' + name, cells(g, i >> 2, [i & 3]), 78, 'w'));
 }
 
 // Empaquetado en atlas.
