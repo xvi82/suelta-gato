@@ -14,7 +14,7 @@
   const W = 640, H = 360, T = TILE;
   // El mundo se dibuja ampliado (personajes grandes, estilo recreativa); la cámara se mueve también en vertical
   const Z = 1.5, VW = W / Z, VH = H / Z, CAMY_MAX = H - VH, RES = window.SPRITE_RES || 1, BK = 0.6;
-  const TIME_LIMIT = { facil: 350, normal: 280, dificil: 220 };
+  const TIME_LIMIT = { facil: 260, normal: 210, dificil: 165 };
   let curZ = 1;
   const rz = v => Math.round(v * curZ) / curZ;
   const cv = document.getElementById('game'), ctx = cv.getContext('2d');
@@ -2789,14 +2789,14 @@
 
   // --- el chiringuito de Papá: entre nivel y nivel se gastan las pesetas en ventajas para el siguiente
   const SHOP = [
-    { k: 'vida', name: 'VIDA EXTRA', price: 50, desc: 'Una vida más para el viaje. ¡Se nota al momento!' },
-    { k: 'corazon', name: 'CORAZÓN +1', price: 20, desc: 'Empiezas el siguiente nivel con un corazón de más.' },
-    { k: 'bocadillo', name: 'BOCATA', price: 25, desc: 'Empiezas grande: aguantas un golpe más y rompes ladrillos.', excl: 'mojo' },
-    { k: 'mojo', name: 'MOJO PICÓN', price: 40, desc: 'Empiezas escupiendo bolas de fuego (y grande, claro).', excl: 'bocadillo' },
-    { k: 'churro', name: 'CHURRO', price: 15, desc: 'Empiezas con el churro de combate: puñetazo largo y doble.', excl: 'chancla' },
-    { k: 'chancla', name: 'CHANCLAS x10', price: 15, desc: 'Empiezas con 10 chanclas de la abuela para lanzar.', excl: 'churro' },
-    { k: 'paella', name: 'PAELLA', price: 30, desc: 'Tres paelleras te dan vueltas y paran tres golpes.' },
-    { k: 'cocido', name: 'COCIDO', price: 35, desc: 'Empiezas con doble salto. ¡Energía de cuchara!' },
+    { k: 'vida', name: 'VIDA EXTRA', price: 100, desc: 'Una vida más para el viaje. ¡Se nota al momento!' },
+    { k: 'corazon', name: 'CORAZÓN +1', price: 40, desc: 'Empiezas el siguiente nivel con un corazón de más.' },
+    { k: 'bocadillo', name: 'BOCATA', price: 50, desc: 'Empiezas grande: aguantas un golpe más y rompes ladrillos.', excl: 'mojo' },
+    { k: 'mojo', name: 'MOJO PICÓN', price: 80, desc: 'Empiezas escupiendo bolas de fuego (y grande, claro).', excl: 'bocadillo' },
+    { k: 'churro', name: 'CHURRO', price: 30, desc: 'Empiezas con el churro de combate: puñetazo largo y doble.', excl: 'chancla' },
+    { k: 'chancla', name: 'CHANCLAS x10', price: 30, desc: 'Empiezas con 10 chanclas de la abuela para lanzar.', excl: 'churro' },
+    { k: 'paella', name: 'PAELLA', price: 60, desc: 'Tres paelleras te dan vueltas y paran tres golpes.' },
+    { k: 'cocido', name: 'COCIDO', price: 70, desc: 'Empiezas con doble salto. ¡Energía de cuchara!' },
   ];
   const SHOP_THANKS = ['¡Marchando!', '¡Buena elección!', '¡Eso está de rechupete!', '¡Oído cocina!', '¡Que aproveche, campeón!'];
   function startShop() { G.state = 'shop'; G.t = 0; G.shop = { sel: 0, bought: {}, msg: '¡Bienvenid' + (G.hero === 'boy' ? 'o' : 'a') + ' al chiringuito!', msgT: 0, popT: {} }; Sound.play('title'); Input.clear(); }
