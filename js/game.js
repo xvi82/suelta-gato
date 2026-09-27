@@ -233,7 +233,7 @@
   }
 
   // Fondos dibujados (carpeta fondos/): si existe la imagen del nivel, sustituye al fondo generado
-  const photos = {}, PHOTO_H = 420; let LAIR = null;
+  const photos = {}, PHOTO_H = 420; let LAIR = null, SALA = null;
   const photosReady = Promise.all(Object.entries(window.FONDOS || {}).map(([k, src]) => new Promise(r => { const im = new Image(); im.onload = () => { photos[k] = im; r(); }; im.onerror = r; im.src = src; })));
   function scaledPhoto(im) {
     const w = Math.round(im.width * PHOTO_H / im.height), c = Art.canvas(w, PHOTO_H), x = c.getContext('2d');
@@ -557,7 +557,7 @@
         case 'muelle': out.push({ kind: 'muelle', x: x + 3, y: y - 14, w: T - 6, h: 14, squash: 0, t: 0 }); break;
         case 'metro': {
           const ww = s.ww * T, span = s.w * T + ww;
-          for (let i = 0; i < s.n; i++) out.push({ kind: 'metro', plat: true, x: x - ww, y, w: ww, h: 34, xa: x - ww, span, off: i * span / s.n, speed: s.speed, clip: [x, x + s.w * T], t: 0 });
+          for (let i = 0; i < s.n; i++) out.push({ kind: 'metro', plat: true, x: x - ww, y, w: ww, h: 34, xa: x - ww, span, ph: i * span / s.n, speed: s.speed, clip: [x, x + s.w * T], t: 0 });
           break;
         }
         case 'vagoneta': out.push({ kind: 'vagoneta', plat: true, x, y, w: 3 * T, h: 20, xs: x, xe: (s.c + s.w - 3) * T, xr: (s.c + s.w) * T, v: 0, st: 'idle', t: 0 }); break;
@@ -565,7 +565,7 @@
         case 'telesilla': {
           const xs = (s.c - 2) * T, xe = (s.c + s.w) * T, ys = s.r0 * T, ye = s.r1 * T, clip = [s.c * T, (s.c + s.w) * T];
           out.push({ kind: 'cable', x: xs, y: ys, w: xe - xs + 2 * T, xs, xe, ys, ye, clip, t: 0 });
-          for (let i = 0; i < s.n; i++) out.push({ kind: 'silla', plat: true, x: xs, y: ys, w: 2 * T, h: 8, xs, xe, ys, ye, off: i / s.n, clip, t: 0 });
+          for (let i = 0; i < s.n; i++) out.push({ kind: 'silla', plat: true, x: xs, y: ys, w: 2 * T, h: 8, xs, xe, ys, ye, ph: i / s.n, clip, t: 0 });
           break;
         }
         case 'piscina': out.push({ kind: 'piscina', x, y: y + 8, w: s.w * T, t: 0 }); break;
@@ -595,8 +595,8 @@
           else if (o.st === 'gone' && o.t > 150) { o.st = 'idle'; o.y = o.y0; o.off = false; o.appear = 24; }
           break;
         case 'muelle': if (o.squash > 0) o.squash--; break;
-        case 'metro': o.x = o.xa + ((o.off + o.t * o.speed) % o.span); break;
-        case 'silla': { const f = (o.off + o.t / 520) % 1; o.x = o.xs + (o.xe - o.xs) * f; o.y = o.ys + (o.ye - o.ys) * f; break; }
+        case 'metro': o.x = o.xa + ((o.ph + o.t * o.speed) % o.span); break;
+        case 'silla': { const f = (o.ph + o.t / 520) % 1; o.x = o.xs + (o.xe - o.xs) * f; o.y = o.ys + (o.ye - o.ys) * f; break; }
         case 'vagoneta':
           if (o.appear > 0) o.appear--;
           if (o.st === 'idle') { if (P.ride === o) { o.st = 'go'; o.v = 0.5; Sound.sfx.select(); popText(o.x + o.w / 2, o.y - 44, '¡AGÁRRATE!', '#ffe066'); } }
@@ -672,7 +672,7 @@
             if (row > 0) o.warn.push({ x: tx, y: row * T, t: 0 });
             if (!o.told) { o.told = true; L.shake = 6; popText(pcx, P.y - 30, '¡ERUPCIÓN! ¡OJO CON LAS SOMBRAS!', '#ff8a3a'); }
           }
-          for (const w of o.warn) if (!frozen && ++w.t === 45) { L.projs.push({ kind: 'roca', owner: 'e', x: w.x - 9, y: L.camY - 30, w: 18, h: 18, vx: 0, vy: 4, g: 0.3, t: 0 }); Sound.sfx.fire(); }
+          for (const w of o.warn) if (!frozen && ++w.t === 45) { L.projs.push({ kind: 'roca', owner: 'e', x: w.x - 9 - 20, y: L.camY - 30, w: 18, h: 18, vx: 0.6, vy: 4, g: 0.3, t: 0 }); Sound.sfx.fire(); }
           o.warn = o.warn.filter(w => w.t < 85);
           break;
         }
@@ -705,7 +705,7 @@
     addFx('impacto', o.x + o.w, o.y + 6, { bottom: false, scale: 1 });
     parts(o.x + o.w - 6, o.y + 8, 18, ['#d0303a', '#ffd23f', '#6a4a3a', '#ffffff'], { sp: 4, up: 5 });
     popText(o.x + o.w / 2, o.y - 24, '¡CATAPUM!', '#ff6a6a', 16);
-    if (rider) { P.ride = null; hurtPlayer({ x: o.xr + 40, w: 0 }); if (!P.dead) { P.vy = -12; P.launch = true; P.onGround = false; P.fling = { vx: 3.6, t: 24 }; } }
+    if (rider) { P.ride = null; hurtPlayer({ x: o.xr + 40, w: 0 }); if (!P.dead) { P.vy = -12; P.launch = true; P.onGround = false; P.fling = { vx: 2.6, t: 14 }; } }
   }
   // Aterrizar sobre plataformas, vagones, sillas... o sobre un muelle (que te lanza)
   function landOnObjs(pb) {
@@ -781,6 +781,23 @@
   }
 
   // --- dibujo de las atracciones
+  // Si están los sprites de los lotes 5-7 (obj_*) se usan; si no, se dibujan a mano como antes.
+  // Los sprites están a resolución de pantalla: su tamaño en el mundo es el de la imagen / Z.
+  function spr(im, x, y, w, h, flip = false) {
+    ctx.imageSmoothingEnabled = true;
+    if (flip) { ctx.save(); ctx.translate(x + w, y); ctx.scale(-1, 1); ctx.drawImage(im, 0, 0, w, h); ctx.restore(); }
+    else ctx.drawImage(im, x, y, w, h);
+    ctx.imageSmoothingEnabled = false;
+  }
+  // plataforma estirable: los extremos a su tamaño y el centro estirado
+  function spr3(im, x, y, w, h) {
+    const cap = Math.min(im.width * 0.22, im.width * w / (im.width / Z) / 2), cw = cap / Z * (h / (im.height / Z));
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(im, 0, 0, cap, im.height, x, y, cw, h);
+    ctx.drawImage(im, cap, 0, im.width - 2 * cap, im.height, x + cw, y, w - 2 * cw, h);
+    ctx.drawImage(im, im.width - cap, 0, cap, im.height, x + w - cw, y, cw, h);
+    ctx.imageSmoothingEnabled = false;
+  }
   function drawObjs(front) {
     const cam = L.camX, t = G.t, th = L.loc.tiles;
     const vis = (x0, x1) => x1 > cam - 40 && x0 < cam + VW + 40;
@@ -809,7 +826,8 @@
         case 'geiser': drawVent(o, t); break;
         case 'erupcion':
           for (const w of o.warn) {
-            const k = Math.min(1, w.t / 45);
+            const k = Math.min(1, w.t / 45), av = elem('obj_aviso', w.t < 15 ? 0 : w.t < 30 ? 1 : 2);
+            if (av && w.t < 45) { const a0 = elem('obj_aviso', 2), s = 30 / (a0.height / Z), iw = av.width / Z * s, ih = av.height / Z * s; if (t % 10 < 7) spr(av, w.x - iw / 2, w.y + 4 - ih, iw, ih); continue; }
             ctx.fillStyle = 'rgba(40,10,10,' + (0.25 + 0.35 * k) + ')'; ctx.beginPath(); ctx.ellipse(w.x, w.y + 1, 5 + 10 * k, 2 + 2.5 * k, 0, 0, Math.PI * 2); ctx.fill();
             if (w.t < 45 && t % 10 < 6) { ctx.fillStyle = '#ff4a2a'; ctx.fillRect(w.x - 1.5, w.y - 20, 3, 9); ctx.fillRect(w.x - 1.5, w.y - 8, 3, 3); }
           }
@@ -820,6 +838,12 @@
   function drawPlank(o, th) {
     const sh = o.st === 'shake' ? (o.t % 4 < 2 ? -1 : 1) : 0, x = Math.round(o.x + sh), y = Math.round(o.y), w = o.w, h = o.h;
     if (o.appear > 0) ctx.globalAlpha = 1 - o.appear / 24;
+    const f0 = elem('obj_tabla', 0);
+    if (f0) {
+      const im = elem('obj_tabla', o.st === 'shake' ? 1 : o.st === 'fall' ? 2 : 0), k = (w + 4) / (f0.width / Z), iw = im.width / Z * k, ih = im.height / Z * k, h0 = f0.height / Z * k;
+      spr(im, x + w / 2 - iw / 2, y - 2 - (ih - h0) * 0.45, iw, ih);
+      ctx.globalAlpha = 1; return;
+    }
     ctx.fillStyle = '#1b1426'; ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
     ctx.fillStyle = th.plat; ctx.fillRect(x, y, w, h);
     ctx.fillStyle = th.platHi; ctx.fillRect(x, y, w, 2);
@@ -837,6 +861,8 @@
     ctx.fillStyle = 'rgba(27,20,38,0.35)';
     if (o.ax) for (let gx = o.x0 + w / 2; gx <= o.x0 + o.ax + w / 2; gx += 8) ctx.fillRect(gx, o.y0 + h / 2, 4, 1);
     if (o.ay) for (let gy = Math.min(o.y0, o.y0 + o.ay); gy <= Math.max(o.y0, o.y0 + o.ay) + h; gy += 8) ctx.fillRect(o.x0 + w / 2 - 1, gy, 2, 4);
+    const im = elem('obj_metal', Math.floor(G.t / 30) % 2);
+    if (im) { spr3(im, x - 2, y - 1, w + 4, im.height / Z * (w + 4) / Math.max(w + 4, im.width / Z)); return; }
     ctx.fillStyle = '#1b1426'; ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
     ctx.fillStyle = '#8a93a8'; ctx.fillRect(x, y, w, h);
     ctx.fillStyle = '#d0d8e8'; ctx.fillRect(x, y, w, 2);
@@ -846,6 +872,11 @@
     ctx.fillStyle = '#e0e6f0'; for (let i = 14; i < w - 12; i += 12) ctx.fillRect(x + i, y + 5, 2, 2);
   }
   function drawSpring(o) {
+    const f0 = elem('obj_muelle', 0);
+    if (f0) {
+      const im = elem('obj_muelle', o.squash > 6 ? 1 : o.squash > 0 ? 2 : 0), k = (o.w + 10) / (f0.width / Z), iw = im.width / Z * k, ih = im.height / Z * k;
+      spr(im, o.x + o.w / 2 - iw / 2, o.y + o.h + 1 - ih, iw, ih); return;
+    }
     const x = Math.round(o.x), base = Math.round(o.y + o.h), comp = o.squash > 0 ? Math.sin(o.squash / 12 * Math.PI) * 7 : 0, top = Math.round(o.y + comp);
     ctx.fillStyle = '#1b1426'; ctx.fillRect(x - 2, base - 4, o.w + 4, 4);
     ctx.fillStyle = '#6a6a7a'; ctx.fillRect(x - 1, base - 3, o.w + 2, 2);
@@ -856,6 +887,8 @@
   }
   function drawWagon(o) {
     const x = Math.round(o.x), y = Math.round(o.y), w = o.w, h = o.h;
+    const im = elem('obj_metro', o.ph > 1 ? 1 : 0);
+    if (im) { spr(im, x - 2, y - 3, w + 4, im.height / Z * (w + 4) / (im.width / Z)); return; }
     ctx.fillStyle = '#1b1426'; ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
     ctx.fillStyle = '#eceef2'; ctx.fillRect(x, y, w, h);
     ctx.fillStyle = '#b8bcc8'; ctx.fillRect(x, y, w, 3);
@@ -877,6 +910,8 @@
   }
   function drawChair(o) {
     const x = Math.round(o.x), y = Math.round(o.y), w = o.w, cx = x + w / 2;
+    const im = elem('obj_silla', Math.floor((o.t + o.ph * 100) / 40) % 2);
+    if (im) { const ih = 60, iw = im.width / im.height * ih; spr(im, cx - iw / 2, y + 10 - ih, iw, ih); return; }
     ctx.fillStyle = '#1b1426'; ctx.fillRect(cx - 1.5, y - 46, 3, 40); ctx.fillRect(cx - 4, y - 48, 8, 4);
     ctx.fillRect(x + 1, y - 1, w - 2, 8); ctx.fillRect(x + 1, y - 19, 6, 19); ctx.fillRect(cx - 1.5, y - 8, w / 2 - 2, 3);
     ctx.fillStyle = '#d02838'; ctx.fillRect(x + 2, y, w - 4, 6); ctx.fillRect(x + 2, y - 18, 4, 18);
@@ -889,6 +924,16 @@
     ctx.fillStyle = '#8a6a4a'; for (let x = x0 + T; x < x1 - 4; x += 3 * T) ctx.fillRect(x, ry + 4, 4, H + 40 - ry);
     ctx.fillStyle = '#6a4a2a'; for (let x = x0; x < x1; x += 10) ctx.fillRect(x, ry + 1, 5, 4);
     ctx.fillStyle = '#1b1426'; ctx.fillRect(x0, ry - 1, x1 - x0, 3); ctx.fillStyle = '#c8c8d8'; ctx.fillRect(x0, ry - 1, x1 - x0, 1.5);
+    const f0 = elem('obj_vagoneta', 0);
+    if (f0) {
+      // destrozada un momento donde se estrelló; si no, parada o lanzada
+      const broken = o.off && o.st === 'gone' && o.t < 45;
+      if (o.off && !broken) return;
+      const im = elem('obj_vagoneta', broken ? 2 : o.st === 'go' ? 1 : 0), k = (o.w + 4) / (f0.width / Z), iw = im.width / Z * k, ih = im.height / Z * k;
+      if (o.appear > 0) ctx.globalAlpha = 1 - o.appear / 24;
+      spr(im, (broken ? o.xe : o.x) + o.w / 2 - (f0.width / Z * k) / 2 + (broken ? 4 : o.st === 'go' ? -(iw - f0.width / Z * k) : 0), ry + 1 - ih, iw, ih);
+      ctx.globalAlpha = 1; return;
+    }
     if (o.off) return;
     const x = Math.round(o.x), y = Math.round(o.y), w = o.w;
     if (o.appear > 0) ctx.globalAlpha = 1 - o.appear / 24;
@@ -903,6 +948,11 @@
     ctx.globalAlpha = 1;
   }
   function drawFloat(o) {
+    const f0 = elem('obj_flotador', 0);
+    if (f0) {
+      const fr = o.st === 'glup' ? 2 : o.sink > 10 ? 1 : 0, im = elem('obj_flotador', fr), k = (o.w + 10) / (f0.width / Z), iw = im.width / Z * k, ih = im.height / Z * k;
+      spr(im, o.x + o.w / 2 - iw / 2, (fr ? o.y0 + 4 : o.y) - 7 + (fr ? 0 : 0), iw, ih); return;
+    }
     const cx = o.x + o.w / 2, cy = o.y + 5, rx = o.w / 2 - 1, ry = 6;
     ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.ellipse(cx, cy, rx + 1.5, ry + 1.5, 0, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#e0303a'; ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
@@ -936,11 +986,18 @@
   function drawHole(o, t) {
     const cx = o.x + o.w / 2, gy = o.y, wave = Math.sin(t * 0.12) * 2;
     ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.ellipse(cx, gy + 1, 9, 3, 0, 0, Math.PI * 2); ctx.fill();
+    const im = elem('obj_golf', o.done ? 1 : 0);
+    if (im) { const ih = 72, iw = im.width / im.height * ih; spr(im, cx - iw * (o.done ? 0.2 : 0.13), gy + 3 - ih, iw, ih); return; }
     ctx.fillRect(cx - 1.5, gy - 70, 3, 70); ctx.fillStyle = '#f0f0f0'; ctx.fillRect(cx - 0.5, gy - 69, 1.5, 68);
     ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.moveTo(cx + 1, gy - 71); ctx.lineTo(cx + 24, gy - 63 + wave); ctx.lineTo(cx + 1, gy - 54); ctx.fill();
     ctx.fillStyle = o.done ? '#ffd23f' : '#e0303a'; ctx.beginPath(); ctx.moveTo(cx + 1.5, gy - 69); ctx.lineTo(cx + 21, gy - 63 + wave); ctx.lineTo(cx + 1.5, gy - 56); ctx.fill();
   }
   function drawVent(o, t) {
+    const f0 = elem('obj_geiser', 0);
+    if (f0) {
+      const im = elem('obj_geiser', o.st === 'idle' ? 0 : o.st === 'warn' ? 1 : 2), k = 40 / (f0.width / Z), iw = im.width / Z * k, ih = im.height / Z * k;
+      spr(im, o.x - iw / 2, o.y + 3 - ih, iw, ih); return;
+    }
     ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.ellipse(o.x, o.y + 1, 14, 6, 0, Math.PI, 0); ctx.fill();
     ctx.fillStyle = '#5a3a30'; ctx.beginPath(); ctx.ellipse(o.x, o.y + 1, 12, 4.5, 0, Math.PI, 0); ctx.fill();
     ctx.fillStyle = o.st === 'idle' ? '#2a1812' : (t % 6 < 3 ? '#ff8a2a' : '#ffd040'); ctx.fillRect(o.x - 5, o.y - 2, 10, 2);
@@ -948,12 +1005,30 @@
   function drawGeyserJet(o, t) {
     const ph = (o.t % 230) - 180, k = Math.min(1, ph / 8) * (ph > 40 ? Math.max(0, (50 - ph) / 10) : 1), hh = 7 * T * k;
     if (hh <= 1) return;
+    const im = elem('obj_chorro', Math.floor(t / 4) % 3);
+    if (im) {
+      const iw = im.width / im.height * hh;
+      ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.beginPath(); ctx.ellipse(o.x, o.y - hh * 0.9, iw * 0.3, hh * 0.08, 0, 0, Math.PI * 2); ctx.fill();
+      spr(im, o.x - iw / 2, o.y + 4 - hh, iw, hh); return;
+    }
     ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.fillRect(o.x - 12 + Math.sin(t * 0.5) * 2, o.y - hh, 24, hh);
     ctx.fillStyle = 'rgba(255,190,120,0.55)'; ctx.fillRect(o.x - 6, o.y - hh * 0.9, 12, hh * 0.9);
     ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.beginPath(); ctx.ellipse(o.x, o.y - hh, 18, 8, 0, 0, Math.PI * 2); ctx.fill();
   }
   // tubería (verde; en Madrid, alcantarilla gris) con boca donde da al aire
   function drawPipeTile(c, r) {
+    const kind = L.loc.painter === 'madrid' ? 'obj_alcantarilla_' : 'obj_tubo_';
+    if (elem(kind + 'boca')) {
+      const at = (cc, rr) => (rr < 0 || rr >= ROWS || cc < 0 || cc >= L.cols) ? BLOCK : L.tiles[rr][cc];
+      if (at(c - 1, r) === PIPE || at(c, r - 1) === PIPE) return; // se dibuja una vez por tubería
+      let r1 = r; while (at(c, r1 + 1) === PIPE) r1++;
+      const up = !isSolidTile(at(c, r - 1)), x = c * T - 2, w = 2 * T + 4, top = r * T, bot = (r1 + 1) * T;
+      const im = elem(kind + (up ? 'boca' : 'base')), ih = im.height / Z * w / (im.width / Z);
+      ctx.save(); ctx.beginPath(); ctx.rect(x - 4, up ? top - 6 : top, w + 8, bot - top + (up ? 6 + T : 6)); ctx.clip();
+      spr(im, x, up ? top - 3 : bot + 3 - ih, w, up ? Math.max(ih, bot - top + 8) : ih);
+      ctx.restore();
+      return;
+    }
     const pal = L.loc.painter === 'madrid' ? ['#8a93a8', '#d0d8e8', '#4a5268'] : ['#3aa04a', '#9ae88a', '#1f6a2a'];
     const at = (cc, rr) => (rr < 0 || rr >= ROWS || cc < 0 || cc >= L.cols) ? BLOCK : L.tiles[rr][cc];
     const left = at(c - 1, r) !== PIPE, right = at(c + 1, r) !== PIPE;
@@ -972,8 +1047,14 @@
     }
   }
   // bloque de azulejo con el botijo mágico; los puntitos son los usos que le quedan
-  function drawBotijoTile(c, r, y) {
-    const x = c * T;
+  function drawBotijoTile(c, r, y, spent) {
+    const x = c * T, used = L.botijo[c + ',' + r] || 0, b0 = elem('obj_botijo', 0);
+    if (b0) {
+      const bump = L.bumps.some(b => b.c === c && b.r === r), im = elem('obj_botijo', spent ? 3 : bump ? 1 : used ? 2 : 0);
+      const k = (T + 3) / (b0.width / Z), iw = im.width / Z * k, ih = im.height / Z * k;
+      spr(im, x + T / 2 - (b0.width / Z * k) / 2, y + T + 1 - ih, iw, ih); return;
+    }
+    if (spent) return false;
     ctx.fillStyle = '#1b1426'; ctx.fillRect(x, y, T, T);
     ctx.fillStyle = '#f4efdc'; ctx.fillRect(x + 1, y + 1, T - 2, T - 2);
     ctx.fillStyle = '#2a5ab8'; ctx.fillRect(x + 1, y + 1, T - 2, 2); ctx.fillRect(x + 1, y + T - 3, T - 2, 2); ctx.fillRect(x + 1, y + 1, 2, T - 2); ctx.fillRect(x + T - 3, y + 1, 2, T - 2);
@@ -1524,7 +1605,7 @@
     }
     if (P.act) { P.actT++; if (P.actT >= ACTS[P.act].len) P.act = null; }
     const wasGround = P.onGround, vyBefore = P.vy, pb = P.y + P.h;
-    if (P.fling) { P.vx = P.fling.vx; if (--P.fling.t <= 0) P.fling = null; }
+    if (P.fling) { P.vx = P.fling.vx; if (--P.fling.t <= 0) { P.fling = null; P.vx = Math.min(P.vx, 1.2); } } // justo por encima de la barrera y a salvo al otro lado
     if (wind && wind.k > 0.05) { const v = P.vx; P.vx = -wind.k * (1 + 0.25 * D.speed) * (P.onGround ? 0.6 : 1); physX(P); P.vx = v; }
     physX(P); physY(P);
     landOnObjs(pb);
@@ -1702,7 +1783,9 @@
   }
   function drawProj(p) {
     if (p.kind === 'roca') {
-      const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+      const cx = p.x + p.w / 2, cy = p.y + p.h / 2, im = elem('obj_roca', Math.floor(p.t / 4) % 3);
+      // la piedra está abajo a la derecha del dibujo; la estela sube hacia la izquierda
+      if (im) { const ih = 46, iw = im.width / im.height * ih; spr(im, cx - iw * 0.6, cy - ih * 0.72, iw, ih); return; }
       ctx.fillStyle = 'rgba(255,120,40,0.45)'; ctx.beginPath(); ctx.ellipse(cx, cy - 10, 7, 12, 0, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#5a3a30'; ctx.beginPath(); ctx.arc(cx, cy, 8.5, 0, Math.PI * 2); ctx.fill();
@@ -1710,7 +1793,9 @@
       return;
     }
     if (p.kind === 'bola') {
-      const cx = p.x + p.w / 2, cy = p.y + p.h / 2, r = p.w / 2;
+      const cx = p.x + p.w / 2, cy = p.y + p.h / 2, r = p.w / 2, im = elem('obj_bola', p.w < 17 ? 0 : p.w < 23 ? 1 : 2);
+      // rueda hacia la izquierda: el dibujo se voltea para que la nieve salpique por detrás
+      if (im) { const ih = p.h * 1.12, iw = im.width / im.height * ih; spr(im, p.x - p.w * 0.08, p.y + p.h + 2 - ih, iw, ih, p.vx < 0); return; }
       ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.arc(cx, cy, r + 1.5, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#cfe0f5'; ctx.beginPath(); ctx.arc(cx + r * 0.25, cy + r * 0.25, r * 0.7, 0, Math.PI * 2); ctx.fill();
@@ -2080,8 +2165,14 @@
     } else { const g = ctx.createLinearGradient(0, H - 60, 0, H); g.addColorStop(0, 'rgba(10,6,20,0)'); g.addColorStop(1, 'rgba(10,6,20,0.8)'); ctx.fillStyle = g; ctx.fillRect(cam - 10, H - 60, VW + 20, 60); }
     // atrezo local, detrás del terreno y sin colisión
     drawLevelProps();
-    // sala secreta: pared de ladrillo oscuro detrás de las monedas
-    if (L.room && cam + VW > L.room.c0 * T) {
+    // sala secreta: su propio fondo (fondos/sala.png) o, si no está, una pared de ladrillo oscuro
+    if (L.room && photos.sala && inRoom()) {
+      if (!SALA) SALA = scaledPhoto(photos.sala);
+      ctx.restore(); ctx.save();
+      drawPhoto(SALA, (cam - L.room.c0 * T) / Math.max(1, (L.room.c1 + 1 - L.room.c0) * T - VW), camY / CAMY_MAX);
+      ctx.fillStyle = 'rgba(12,8,24,0.25)'; ctx.fillRect(0, 0, W, H);
+      ctx.scale(Z, Z); ctx.translate(-cam + sx, -camY + sy);
+    } else if (L.room && cam + VW > L.room.c0 * T) {
       const x0 = (L.room.c0 + 1) * T, x1 = L.room.c1 * T;
       ctx.fillStyle = '#231a36'; ctx.fillRect(x0, 3 * T, x1 - x0, 9 * T);
       ctx.fillStyle = '#2e2448';
@@ -2096,6 +2187,7 @@
       if (tt === TOP && r > 0 && isSolidTile(L.tiles[r - 1][c]) && L.tiles[r - 1][c] !== BLOCK && L.tiles[r - 1][c] !== PIPE) si = 1;
       let y = r * T; const b = L.bumps.find(b => b.c === c && b.r === r); if (b) y -= Math.sin(b.t / 10 * Math.PI) * 8;
       if (tt === BOTIJO) { drawBotijoTile(c, r, y); continue; }
+      if (tt === USED && (L.botijo[c + ',' + r] || 0) >= 3 && drawBotijoTile(c, r, y, true) !== false) continue; // botijo gastado
       const custom = tt === BRICK ? elem('brick', b ? 1 : 0) : tt === QBLOCK ? elem('qblock', b ? 2 : (Math.floor(G.t / 18) % 2)) : tt === USED ? elem('qblock', 3) : null;
       if (custom) ctx.drawImage(custom, c * T, y, T, T); else ctx.drawImage(L.tileset, si * TS, 0, TS, TS, c * T, y, T, T);
       // sombra ambiental bajo salientes
@@ -2963,7 +3055,7 @@
   elementImg.src = window.ELEMENT_ATLAS || '';
   requestAnimationFrame(frame);
   Promise.all([fontReady, imgReady, photosReady, new Promise(r => { const bi = new Image(); bi.onload = () => { try { buildBalloon(bi); } catch (e) { console.warn(e); } r(); }; bi.onerror = r; bi.src = window.BALLOON_SHEET || ''; }), new Promise(r => { const gi = new Image(); gi.onload = () => { try { buildGoalSign(gi); } catch (e) { console.warn(e); } r(); }; gi.onerror = r; gi.src = window.GOAL_SIGN || ''; }), new Promise(r => { const fi = new Image(); fi.onload = () => { try { buildGoalFx(fi); } catch (e) { console.warn(e); } r(); }; fi.onerror = r; fi.src = window.GOAL_FX || ''; })]).then(() => {
-    buildAtlas(img); buildElementSprites(elementImg); Art.buildEnemies(); Art.buildItems(); buildLetterSprites(); buildBotijoSprite();
+    buildAtlas(img); buildElementSprites(elementImg); Art.buildEnemies(); Art.buildItems(); buildLetterSprites(); buildBotijoSprite(); if (elem('obj_botijo')) Art.itemSprites.botijo = elem('obj_botijo');
     for (const k of ['peseta', 'bocadillo', 'mojo', 'turron', 'tortilla', 'churro', 'chancla', 'corazon']) if (elem(k)) Art.itemSprites[k] = elem(k);
     G.state = 'title'; G.t = 0;
     // depuración: ?test=N salta directamente al nivel N

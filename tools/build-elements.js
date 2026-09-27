@@ -426,6 +426,60 @@ TILE_SHEETS.forEach((file, i) => {
   addPiece('reja', resize(gate, 160));
 }
 
+// Lotes 5, 6 y 7 (atracciones): cuadrículas regulares, una fila por objeto con sus poses.
+// Cada celda se recorta sin la rejilla gris y todas las poses de un objeto comparten escala.
+// Son opcionales: si falta un lote, el juego dibuja esas atracciones con su dibujo provisional.
+const SHEET = { minLight: 145, maxSpread: 34 };
+function gridSheet(file, cols, rows) {
+  if (!fs.existsSync(path.join(DIR, file))) { console.log('(sin ' + file + ': se usan los dibujos provisionales)'); return null; }
+  const im = load(file), cw = im.w / cols, ch = im.h / rows;
+  return { im, cell: (r, c) => [Math.round(c * cw) + 6, Math.round(r * ch) + 6, Math.round(cw) - 12, Math.round(ch) - 12] };
+}
+// size: medida en píxeles de pantalla del lado 'w' o 'h' de la pose de referencia (ref) o de la mayor (ref = -1)
+function addPoses(name, ps, size, side = 'h', ref = -1) {
+  const k = size / (ref < 0 ? Math.max(...ps.map(q => q[side])) : ps[ref][side]);
+  for (const q of ps) addPiece(name, resizeTo(q, Math.max(1, Math.round(q.w * k)), Math.max(1, Math.round(q.h * k))));
+}
+const cells = (g, r, cs, fix = p => p, bg = SHEET) => cs.map(c => trim(fix(prep(g.im, g.cell(r, c), bg)), 1));
+{
+  const g = gridSheet('lote 5.png', 3, 4);
+  if (g) {
+    addPoses('obj_metro', cells(g, 0, [0, 1]), 150, 'w');
+    addPoses('obj_vagoneta', cells(g, 1, [0, 1, 2]), 114, 'w', 0);
+    // telesilla: se borra el trozo de cable horizontal (el juego dibuja su propio cable en diagonal)
+    const noCable = p => {
+      dropPaleStrokes(p);
+      const pole = hangerPole(p), keep = p.w * 0.07, rows = Math.round(p.h * 0.3);
+      for (let y = 0; y < rows; y++) for (let x = 0; x < p.w; x++) if (Math.abs(x - pole.x) > keep) p.data[(y * p.w + x) * 4 + 3] = 0;
+      return largestComponent(p);
+    };
+    addPoses('obj_silla', cells(g, 2, [0, 1], noCable), 100, 'h', 0);
+    addPoses('obj_flotador', cells(g, 3, [0, 1, 2]), 84, 'w', 0);
+  }
+}
+{
+  const g = gridSheet('lote 6.png', 3, 5);
+  if (g) {
+    addPoses('obj_roca', cells(g, 0, [0, 1, 2]), 72);
+    for (let c = 0; c < 3; c++) addPoses('obj_bola', cells(g, 1, [c]), 48);
+    addPoses('obj_geiser', cells(g, 2, [0, 1, 2]), 60, 'w', 0);
+    // el vapor es blanco como el fondo: solo se quita el blanco casi puro que toca los bordes
+    addPoses('obj_chorro', cells(g, 3, [0, 1, 2], p => p, { minLight: 245, maxSpread: 8 }), 252);
+    addPoses('obj_aviso', cells(g, 4, [0, 1, 2]), 42);
+  }
+}
+{
+  const g = gridSheet('lote 7.png', 6, 6);
+  if (g) {
+    addPoses('obj_tabla', cells(g, 0, [0, 1, 2]), 72, 'w', 0);
+    addPoses('obj_metal', cells(g, 1, [0, 1]), 108, 'w', 0);
+    addPoses('obj_muelle', cells(g, 2, [0, 1, 2]), 40, 'h');
+    ['tubo_boca', 'tubo_cuerpo', 'tubo_base', 'alcantarilla_boca', 'alcantarilla_cuerpo', 'alcantarilla_base'].forEach((name, c) => addPoses('obj_' + name, cells(g, 3, [c]), 72, 'w'));
+    addPoses('obj_botijo', cells(g, 4, [0, 1, 2, 3]), 40, 'w', 0);
+    addPoses('obj_golf', cells(g, 5, [0, 1]), 110, 'h', 0);
+  }
+}
+
 // Empaquetado en atlas.
 const AW = 1024; let px = 2, py = 2, rowH = 0;
 for (const p of pieces) {

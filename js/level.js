@@ -244,7 +244,7 @@ const Level = (() => {
         hot.push({ col: s + (pitW >> 1), row: h - 6 });
         c += pitW;
         setCol(c, h); tiles[h - 1][c] = BLOCK; tiles[h - 2][c] = BLOCK; c++;
-        flat(ri(3, 5));
+        flat(ri(6, 8)); // sitio para aterrizar si sales despedido
       },
       // Siam Park: tobogán cuesta abajo (te deslizas sin poder frenar)
       tobogan() {
