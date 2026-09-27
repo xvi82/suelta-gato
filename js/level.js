@@ -16,9 +16,9 @@ const LOCAL_TRAMOS = {
 };
 
 const DIFFICULTY = {
-  facil:   { key: 'facil', name: 'FÁCIL', tag: 'Paseo por la playa', hearts: 4, len: 240, maxGap: 3, enemyRate: 0.45, pitRate: 0.16, speed: 0.8, bossHP: 16, powerRate: 0.55, desc: ['4 corazones', 'Huecos pequeños', 'Bichos tranquilos'] },
-  normal:  { key: 'normal', name: 'NORMAL', tag: 'Como un lunes', hearts: 3, len: 300, maxGap: 4, enemyRate: 0.7, pitRate: 0.26, speed: 1, bossHP: 24, powerRate: 0.4, desc: ['3 corazones', 'Saltos serios', 'Bichos con ganas'] },
-  dificil: { key: 'dificil', name: 'DIFÍCIL', tag: 'Modo abuela con chancla', hearts: 2, len: 360, maxGap: 4, enemyRate: 1.0, pitRate: 0.36, speed: 1.25, bossHP: 32, powerRate: 0.28, desc: ['2 corazones', 'Abismos por todas partes', 'Bichos furiosos'] },
+  facil:   { key: 'facil', name: 'FÁCIL', tag: 'Paseo por la playa', hearts: 4, len: 275, maxGap: 3, enemyRate: 0.45, pitRate: 0.16, speed: 0.8, bossHP: 16, powerRate: 0.55, desc: ['4 corazones', 'Huecos pequeños', 'Bichos tranquilos'] },
+  normal:  { key: 'normal', name: 'NORMAL', tag: 'Como un lunes', hearts: 3, len: 345, maxGap: 4, enemyRate: 0.7, pitRate: 0.26, speed: 1, bossHP: 24, powerRate: 0.4, desc: ['3 corazones', 'Saltos serios', 'Bichos con ganas'] },
+  dificil: { key: 'dificil', name: 'DIFÍCIL', tag: 'Modo abuela con chancla', hearts: 2, len: 415, maxGap: 4, enemyRate: 1.0, pitRate: 0.36, speed: 1.25, bossHP: 32, powerRate: 0.28, desc: ['2 corazones', 'Abismos por todas partes', 'Bichos furiosos'] },
 };
 
 // Tipos de enemigo
