@@ -448,9 +448,10 @@
     L.objs = makeObjs(data.objs); L.botijo = {}; L.got = LETTERS.map(() => false);
     if (loc.snow) for (let i = 0; i < 110; i++) L.snow.push({ x: rand(0, W), y: rand(0, H), s: rand(0.4, 1.4), p: rand(0, 6) });
     P = newPlayer(); P.y = groundYAt(2) - P.h;
+    applyPerks();
     L.props = makeLevelProps(idx);
     L.camX = 0; L.nick = nick();
-    L.mini = makeMini(); L.miniFight = null; L.cameo = null; L.freezeT = 0;
+    L.mini = makeMini(); L.miniFight = null; L.cameo = null; L.freezeT = 0; G.slow = null;
     if (L.mini) L.enemies.push(L.mini);
     // Machín se deja ver dos veces antes de la arena del mini-jefe
     const end = L.mini ? L.miniCol : L.goalStart;
@@ -1467,6 +1468,7 @@
     const it = makeItem('tortilla', e.x + e.w / 2 - 8, e.y); it.state = 'live'; it.vx = 1.2; it.vy = -5; L.items.push(it);
     for (let i = 0; i < 8; i++) { const c = makeItem('peseta', e.x + e.w / 2 - 6 + (i - 3.5) * 14, e.y - 10 - (i % 2) * 14, true); L.items.push(c); }
     L.miniMusicT = 110; // la música del nivel vuelve tras la fanfarria
+    startSlowmo(ko.x, e.y + e.h / 2, '¡' + e.mini.name + ', K.O.!');
     bubble(P, fill(pick(['¡Toma ya! ¡A por ti, {M}!', '¡Literalmente K.O., bro!', '¡Six seven! ¡Siguiente!', '¡Aguanta, {C}, que voy!']), G.C), 120);
   }
   // Truco común de los mini-jefes: salto aplastante que manda dos ondas por el suelo
@@ -1841,6 +1843,7 @@
       popText(P.x + P.w / 2, P.y - 14, P.shield ? '¡CLONG! Quedan ' + P.shield : '¡CLONG! ¡SIN PAELLA!', '#ffd23f');
       return;
     }
+    L.hits = (L.hits || 0) + 1; // medalla "sin un rasguño"
     P.hurtT = 30; P.inv = 100; P.act = null;
     P.vx = (P.x + P.w / 2 < sx ? -1 : 1) * 3; P.vy = -4.5;
     L.shake = 8;
@@ -1854,6 +1857,7 @@
   }
   function killPlayer() {
     if (P.dead) return;
+    L.hits = (L.hits || 0) + 1;
     P.dead = true; P.deadT = 0; P.vy = -8; P.vx = 0; P.hearts = 0; P.starT = 0;
     Sound.stop(); Sound.sfx.die();
     L.bubbles = []; mamaPop('dead');
@@ -2153,6 +2157,7 @@
       B.hp = 0; B.state = 'defeat'; B.st = 0; B.vx = 0; Sound.stop(); Sound.sfx.meow(0.7); L.shake = 20;
       L.projs = L.projs.filter(p => p.owner === 'p'); addScore(10000);
       popText(B.x + B.w / 2, B.y - 30, '¡K.O.! 10000', '#ffe066', 16);
+      startSlowmo(B.x + B.w / 2, B.y + B.h / 2, '¡' + (L.nick || CAT).toUpperCase() + ', K.O.!');
       return;
     }
     if (B.state !== 'jump' && B.onGround) { B.state = 'hurt'; B.st = 20; B.vx = (B.x + B.w / 2 < P.x + P.w / 2 ? -2.5 : 2.5); }
@@ -2560,7 +2565,11 @@
     if (L.cs && L.cs.draw) L.cs.draw();
     L.projs.forEach(drawProj);
     L.fx.forEach(drawFx);
-    L.parts.forEach(p => { ctx.fillStyle = p.col; ctx.fillRect(p.x, p.y, p.s * 0.75, p.s * 0.75); });
+    L.parts.forEach(p => {
+      ctx.fillStyle = p.col;
+      if (p.conf) { const w = Math.max(0.6, p.s * Math.abs(Math.cos(p.life * 0.15 + p.ph))); ctx.fillRect(p.x - w / 2, p.y, w, p.s * 0.6); }
+      else ctx.fillRect(p.x, p.y, p.s * 0.75, p.s * 0.75);
+    });
     ctx.restore(); curZ = 1;
     // velo frío del gazpacho (parpadea cuando está a punto de acabarse)
     if (L.freezeT > 0 && (L.freezeT > 90 || G.t % 20 < 12)) { ctx.fillStyle = 'rgba(150,215,255,0.16)'; ctx.fillRect(0, 0, W, H); }
@@ -2740,8 +2749,132 @@
   // ---------------------------------------------------------- FLUJO DE PARTIDA
   function currentMusic() { if (L && ((L.boss && L.boss.state !== 'intro' && L.boss.state !== 'defeat') || L.miniFight === 'on')) return 'boss'; return L ? L.loc.music : 'title'; }
   function saveHi() { if (G.score > G.hi) { G.hi = G.score; try { localStorage.setItem('suelta-gato-hi', String(G.hi)); } catch (e) {} } }
+
+  // --- medallas: tres por nivel y dificultad (todas las letras, sala secreta, sin un rasguño); se guardan en el navegador
+  const MEDALS_KEY = 'suelta-machin-medallas';
+  let MEDALS = {};
+  try { MEDALS = JSON.parse(localStorage.getItem(MEDALS_KEY)) || {}; } catch (e) {}
+  const MEDAL_INFO = [['letra0', 'LETRAS MACHÍN'], ['sala', 'SALA SECRETA'], ['corazon', 'SIN UN RASGUÑO']];
+  const medalsOf = (diff, idx) => (MEDALS[diff] && MEDALS[diff][idx]) || [0, 0, 0];
+  const medalCount = diff => Object.values(MEDALS[diff] || {}).reduce((s, m) => s + m.filter(Boolean).length, 0);
+  function awardMedals() {
+    const now = [L.got.every(Boolean), !L.room || !!L.roomSeen, !L.hits], old = medalsOf(G.diff, G.levelIdx);
+    L.medals = now.map((m, i) => m ? (old[i] ? 1 : 2) : 0); // 2 = recién conseguida
+    (MEDALS[G.diff] = MEDALS[G.diff] || {})[G.levelIdx] = old.map((o, i) => o || now[i] ? 1 : 0);
+    try { localStorage.setItem(MEDALS_KEY, JSON.stringify(MEDALS)); } catch (e) {}
+  }
+  // state: 0 apagada, 1 conseguida, 2 nueva (brilla)
+  function drawMedal(x, y, state, icon, o = {}) {
+    const r = o.r || 14, on = state > 0;
+    ctx.save(); if (o.alpha !== undefined) ctx.globalAlpha = o.alpha;
+    if (o.pop !== undefined) { const k = 1 + 0.6 * Math.max(0, 1 - o.pop); ctx.translate(x, y); ctx.scale(k, k); ctx.translate(-x, -y); }
+    if (!o.small) {
+      // cintas
+      [[-1, on ? '#e0303a' : '#3a3450'], [1, on ? '#3a6ae0' : '#2e2a44']].forEach(([s, c]) => {
+        ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.moveTo(x + s * r * 0.9, y - r * 1.9); ctx.lineTo(x + s * r * 0.1, y - r * 1.9); ctx.lineTo(x - s * r * 0.35, y - r * 0.5); ctx.lineTo(x + s * r * 0.45, y - r * 0.5); ctx.fill();
+        ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(x + s * r * 0.75, y - r * 1.8); ctx.lineTo(x + s * r * 0.2, y - r * 1.8); ctx.lineTo(x - s * r * 0.25, y - r * 0.6); ctx.lineTo(x + s * r * 0.35, y - r * 0.6); ctx.fill();
+      });
+    }
+    if (state === 2) { ctx.fillStyle = `rgba(255,230,102,${0.25 + 0.2 * Math.sin(G.t * 0.2)})`; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, Math.PI * 2); ctx.fill();
+    const g = ctx.createRadialGradient(x - r * 0.4, y - r * 0.4, 1, x, y, r);
+    if (on) { g.addColorStop(0, '#fff6c0'); g.addColorStop(0.5, '#ffc83a'); g.addColorStop(1, '#b0700a'); } else { g.addColorStop(0, '#6a6a80'); g.addColorStop(1, '#34304a'); }
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha *= on ? 1 : 0.35;
+    const im = icon === 'sala' ? null : elem(icon) || Art.itemSprites[icon];
+    if (im) { const k = Math.min(r * 1.2 / im.width, r * 1.2 / im.height); ctx.drawImage(im, x - im.width * k / 2, y - im.height * k / 2, im.width * k, im.height * k); }
+    else txt('?', x + 1, y - (r > 10 ? 7 : 3), { size: r > 10 ? 16 : 8, align: 'center', col: on ? '#8a4a00' : '#ffffff', sh: on ? null : undefined });
+    ctx.restore();
+  }
+
+  // --- el chiringuito de Papá: entre nivel y nivel se gastan las pesetas en ventajas para el siguiente
+  const SHOP = [
+    { k: 'vida', name: 'VIDA EXTRA', price: 50, desc: 'Una vida más para el viaje. ¡Se nota al momento!' },
+    { k: 'corazon', name: 'CORAZÓN +1', price: 20, desc: 'Empiezas el siguiente nivel con un corazón de más.' },
+    { k: 'bocadillo', name: 'BOCATA', price: 25, desc: 'Empiezas grande: aguantas un golpe más y rompes ladrillos.', excl: 'mojo' },
+    { k: 'mojo', name: 'MOJO PICÓN', price: 40, desc: 'Empiezas escupiendo bolas de fuego (y grande, claro).', excl: 'bocadillo' },
+    { k: 'churro', name: 'CHURRO', price: 15, desc: 'Empiezas con el churro de combate: puñetazo largo y doble.', excl: 'chancla' },
+    { k: 'chancla', name: 'CHANCLAS x10', price: 15, desc: 'Empiezas con 10 chanclas de la abuela para lanzar.', excl: 'churro' },
+    { k: 'paella', name: 'PAELLA', price: 30, desc: 'Tres paelleras te dan vueltas y paran tres golpes.' },
+    { k: 'cocido', name: 'COCIDO', price: 35, desc: 'Empiezas con doble salto. ¡Energía de cuchara!' },
+  ];
+  const SHOP_THANKS = ['¡Marchando!', '¡Buena elección!', '¡Eso está de rechupete!', '¡Oído cocina!', '¡Que aproveche, campeón!'];
+  function startShop() { G.state = 'shop'; G.t = 0; G.shop = { sel: 0, bought: {}, msg: '¡Bienvenid' + (G.hero === 'boy' ? 'o' : 'a') + ' al chiringuito!', msgT: 0, popT: {} }; Sound.play('title'); Input.clear(); }
+  function leaveShop() { Sound.sfx.confirm(); G.levelIdx++; startLevelIntro(); }
+  function updateShop() {
+    G.t++; const S = G.shop, n = SHOP.length, cols = 4;
+    S.msgT++; for (const k in S.popT) S.popT[k]++;
+    if (G.t < 20) return;
+    const mv = d => { S.sel = d; Sound.sfx.select(); };
+    if (S.sel < n) {
+      const c = S.sel % cols, r = Math.floor(S.sel / cols);
+      if (Input.pressed('left')) mv(r * cols + (c + cols - 1) % cols);
+      if (Input.pressed('right')) mv(r * cols + (c + 1) % cols);
+      if (Input.pressed('up') && r > 0) mv(S.sel - cols);
+      if (Input.pressed('down')) mv(r + 1 < n / cols ? S.sel + cols : n);
+    } else if (Input.pressed('up')) mv(n - cols + (S.last || 0));
+    if (S.sel < n) S.last = S.sel % cols;
+    if (Input.backP()) { leaveShop(); return; }
+    if (!(Input.pressed('jump') || Input.pressed('punch') || Input.pressed('start'))) return;
+    if (S.sel === n) { leaveShop(); return; }
+    const it = SHOP[S.sel], say = m => { S.msg = m; S.msgT = 0; };
+    if (S.bought[it.k]) { say('¡Eso ya lo llevas, hombre!'); Sound.sfx.bump(); return; }
+    if (it.excl && S.bought[it.excl]) { say(it.k === 'mojo' || it.k === 'bocadillo' ? '¡O bocata o mojo, que no te caben los dos!' : '¡Solo puedes llevar un arma!'); Sound.sfx.bump(); return; }
+    if (G.pesetas < it.price) { say('¡Te faltan ' + (it.price - G.pesetas) + ' pesetas!'); Sound.sfx.hurt(); return; }
+    G.pesetas -= it.price; S.bought[it.k] = true; S.popT[it.k] = 0;
+    if (it.k === 'vida') { G.lives++; Sound.sfx.heal(); } else { (G.perks = G.perks || {})[it.k] = true; Sound.sfx.power(); }
+    Sound.sfx.coin(); say(pick(SHOP_THANKS));
+  }
+  function drawShop() {
+    ctx.fillStyle = 'rgba(12,8,24,0.8)'; ctx.fillRect(0, 0, W, H);
+    const S = G.shop, next = LOCATIONS[G.levelIdx + 1];
+    txt('EL CHIRINGUITO DE PAPÁ', W / 2, 12, { size: 16, align: 'center', col: '#ffe066' });
+    txt('Gasta tus pesetas antes de ir a ' + (next ? next.short : 'la nieve'), W / 2, 36, { align: 'center', col: '#c8c8e0' });
+    // el vendedor y el monedero
+    drawPresenter(12, 18, 64, 96, { t: G.t - 6, noCaption: true });
+    const mb = wrap(S.msg, 13);
+    box(10, 186, 116, 14 + mb.length * 11, '#fff4fa', '#1b1426');
+    mb.forEach((l, i) => txt(l, 68, 193 + i * 11, { align: 'center', col: '#1b1426', sh: null }));
+    ctx.drawImage(Art.itemSprites.peseta, 18, 250, 16, 16);
+    txt('x ' + G.pesetas, 40, 254, { size: 16, col: '#ffe066' });
+    txt('VIDAS x ' + G.lives, 18, 278, { col: '#8affff' });
+    // mostrador
+    SHOP.forEach((it, i) => {
+      const x = 144 + (i % 4) * 122, y = 60 + Math.floor(i / 4) * 108, w = 112, h = 100, sel = S.sel === i;
+      const got = S.bought[it.k], blocked = !got && it.excl && S.bought[it.excl], cant = !got && G.pesetas < it.price;
+      glassBox(x, y, w, h, sel, got ? { border: '#8aff8a', fill: 'rgba(40,90,50,0.55)' } : {});
+      const bounce = S.popT[it.k] !== undefined ? Math.max(0, 10 - S.popT[it.k]) * Math.sin(S.popT[it.k] * 0.8) : sel ? Math.sin(G.t * 0.15) * 2 : 0;
+      ctx.save(); if (blocked || (cant && !sel)) ctx.globalAlpha = 0.45;
+      if (it.k === 'vida') drawChar(G.hero, sel ? WALK[Math.floor(G.t / 5) % 8] : IDLE[Math.floor(G.t / 12) % 4], x + w / 2, y + 52 - bounce, 1, 0.72);
+      else { const im = elem(it.k) || Art.itemSprites[it.k]; if (im) { const k = Math.min(44 / im.width, 38 / im.height); ctx.drawImage(im, x + w / 2 - im.width * k / 2, y + 50 - bounce - im.height * k, im.width * k, im.height * k); } }
+      ctx.restore();
+      txt(it.name, x + w / 2, y + 58, { align: 'center', col: sel ? '#ffe066' : '#ffffff' });
+      if (got) txt('¡COMPRADO!', x + w / 2, y + 78, { align: 'center', col: '#8aff8a' });
+      else {
+        ctx.drawImage(Art.itemSprites.peseta, x + w / 2 - 22, y + 76, 12, 12);
+        txt(String(it.price), x + w / 2 - 6, y + 78, { col: cant ? '#ff6a6a' : '#ffe066' });
+      }
+    });
+    const d = S.sel < SHOP.length ? SHOP[S.sel].desc : 'Ya está bien de compras: ¡a rescatar a ' + G.C + '!';
+    wrap(d, 58).forEach((l, i) => txt(l, 384, 280 + i * 11, { align: 'center', col: '#8affff' }));
+    const bs = S.sel === SHOP.length;
+    glassBox(264, 306, 240, 24, bs, bs ? { fill: 'rgba(160,60,40,0.7)' } : {});
+    txt((bs && G.t % 40 < 28 ? '> ' : '') + '¡A POR MACHÍN!', 384, 314, { align: 'center', col: bs ? '#ffe066' : '#ffffff' });
+    txt(TCH() ? 'JOYSTICK elegir   SALTO comprar   PATADA seguir' : 'FLECHAS elegir   ESPACIO/A comprar   C/B seguir', W / 2, 344, { align: 'center', col: '#8a8aa8' });
+  }
+  // lo comprado en el chiringuito se estrena al empezar el nivel
+  function applyPerks() {
+    const k = G.perks || {}; G.perks = {};
+    if (k.corazon) P.hearts = D.hearts + 1;
+    if (k.mojo) setPower('fire'); else if (k.bocadillo) setPower('big');
+    if (k.churro) P.weapon = 'churro';
+    if (k.chancla) { P.weapon = 'chancla'; P.ammo = 10; }
+    if (k.paella) P.shield = 3;
+    if (k.cocido) P.cocido = true;
+  }
+
   function startGame() {
-    D = DIFFICULTY[G.diff]; G.mamaSeen = false; G.lives = 5; G.score = 0; G.pesetas = 0; G.levelIdx = 0;
+    D = DIFFICULTY[G.diff]; G.mamaSeen = false; G.lives = 5; G.score = 0; G.pesetas = 0; G.levelIdx = 0; G.perks = {};
     startStory();
   }
   function startLevelIntro() { G.state = 'intro'; G.t = 0; loadLevel(G.levelIdx); Sound.stop(); Sound.sfx.confirm(); }
@@ -2787,7 +2920,7 @@
     }
   }
   function updateCommon() {
-    L.parts.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += p.g; p.life--; });
+    L.parts.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += p.g; p.life--; if (p.conf) { p.vy = Math.min(p.vy, 1.1); p.vx += Math.sin(p.life * 0.08 + p.ph) * 0.03; } });
     L.parts = L.parts.filter(p => p.life > 0);
     L.fx.forEach(f => f.t++); L.fx = L.fx.filter(f => f.t < f.life);
     if (L.checkpointAnim) L.checkpointAnim++;
@@ -2936,17 +3069,19 @@
     const secs = Math.floor(L.time / 60);
     L.bonus = { time: Math.floor(L.timeLeft / 60) * 20, hearts: P.hearts * 500, kills: L.kills, coins: L.coinsGot, secs };
     L.bonusPaid = 0; L.bonusTotal = L.bonus.time + L.bonus.hearts;
+    awardMedals();
     Sound.sfx.clear();
   }
   function updateClear() {
     G.t++;
     if (G.t > 90 && L.bonusPaid < L.bonusTotal) { const step = Math.min(L.bonusTotal - L.bonusPaid, 100); L.bonusPaid += step; G.score += step; if (G.t % 3 === 0) Sound.sfx.tally(); }
-    if ((G.t > 150 && Input.confirm()) || G.t > 900) { G.score += L.bonusTotal - L.bonusPaid; L.bonusPaid = L.bonusTotal; G.levelIdx++; saveHi(); startLevelIntro(); }
+    L.medals.forEach((m, i) => { if (m && G.t === MEDAL_T0 + i * 22) { if (m === 2) Sound.sfx.checkpoint(); else Sound.sfx.coin(); } });
+    if ((G.t > 150 && Input.confirm()) || G.t > 900) { G.score += L.bonusTotal - L.bonusPaid; L.bonusPaid = L.bonusTotal; saveHi(); startShop(); }
   }
 
   // --- final
   function startEnding() {
-    Sound.play('ending');
+    Sound.play('ending'); awardMedals();
     L.projs = []; L.endT = 0; P.act = null; P.vx = 0; P.hurtT = 0; P.inv = 0; P.starT = 0;
     const A = L.arenaStart;
     L.freedX = (A + 16) * T;
@@ -2987,6 +3122,7 @@
       txt('PUNTUACIÓN: ' + G.score, W / 2, 180, { size: 16, align: 'center', col: '#8affff', alpha: a });
       txt('PESETAS: ' + G.pesetas + '    DIFICULTAD: ' + D.name, W / 2, 210, { align: 'center', alpha: a });
       txt(G.score >= G.hi ? '¡NUEVO RÉCORD!' : 'RÉCORD: ' + G.hi, W / 2, 230, { align: 'center', col: '#ff8ab0', alpha: a });
+      if (L.medals) MEDAL_INFO.forEach(([icon], i) => drawMedal(W / 2 + (i - 1) * 28, 252, L.medals[i], icon, { r: 9, small: true, alpha: a }));
       txt('¡GRACIAS POR JUGAR!', W / 2, 272, { size: 16, align: 'center', col: '#ffffff', alpha: a });
       drawPresenter(14, 20, 150, 96, { alpha: a, noCaption: true, caption: '¡BRAVO!' });
       if (e > 700 && G.t % 60 < 40) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / START', W / 2, 310, { align: 'center', col: '#ffe066' });
@@ -3098,6 +3234,7 @@
       txt('"' + d.tag + '"', 102, y + 36, { col: '#ffffff' });
       txt(d.desc.join(' · '), 102, y + 52, { col: '#8affff' });
       for (let h = 0; h < d.hearts; h++) ctx.drawImage(Art.itemSprites.corazon, 500 - h * 18, y + 12, 14, 14);
+      const mc = medalCount(k); if (mc) { drawMedal(460, y + 56, 1, 'letra0', { r: 7, small: true }); txt(mc + '/' + LOCATIONS.length * 3, 472, y + 52, { col: '#ffe066' }); }
       if (sel && G.t % 40 < 28) txt('>', 89, y + 14, { col: '#ffe066' });
     });
     txt('Tienes 5 vidas en todas las dificultades', W / 2, 322, { align: 'center', col: '#ff8ab0' });
@@ -3211,6 +3348,9 @@
     kinds.forEach((k, i) => { const x = W / 2 - kinds.length * 36 + i * 72 + 36; if (HD[k]) { const A = HD[k], an = ENEMY_TYPES[k].fly ? (A.fly || A.idle) : (A.walk || A.idle); const f = SPRITE_FRAMES['en_' + k][an[0]], sc = Math.min(1.3, 48 / (f[3] / RES)); drawHDFrame(k, an[Math.floor(G.t / 6) % an.length], x, 352, -1, { scale: sc }); } else { const img = Art.enemySprites[k].L[Math.floor(G.t / 15) % 2]; ctx.drawImage(img, Math.round(x - img.width / 2), 352 - img.height); } });
     if (final) txt('¡La guarida de ' + (L && L.nick || CAT) + ' te espera al final!', W / 2, 162, { align: 'center', col: '#ff8ab0' });
     txt('Busca las letras  M-A-C-H-Í-N', 300, 186, { align: 'center', col: '#ffb060' });
+    const md = medalsOf(G.diff, G.levelIdx);
+    txt('MEDALLAS', 544, 284, { align: 'center', col: '#c8c8e0' });
+    MEDAL_INFO.forEach(([icon], i) => drawMedal(514 + i * 30, 312, md[i], icon, { r: 10, small: true }));
     // especialidad de la casa (siempre sale en algún bloque ? del nivel)
     const food = CITY_FOOD[G.levelIdx];
     if (food) {
@@ -3283,19 +3423,28 @@
     txt('PUNTUACIÓN ' + G.score + '   RÉCORD ' + G.hi, W / 2, 320, { align: 'center', col: '#8affff' });
   }
 
+  const MEDAL_T0 = 20 + 6 * 14 + 10;
   function drawClear() {
     ctx.fillStyle = 'rgba(12,8,24,0.72)'; ctx.fillRect(0, 0, W, H);
     txt('¡' + L.loc.short.toUpperCase() + ' SUPERADO!', W / 2, 50, { size: 16, align: 'center', col: '#ffe066' });
     txt(fill('...pero ' + (L.nick || CAT) + ' se ha escapado con {C}', G.C), W / 2, 80, { align: 'center', col: '#ff8ab0' });
     const b = L.bonus, got = L.got ? L.got.filter(Boolean).length : 0;
     const rows = [['Bichos vencidos', b.kills], ['Pesetas recogidas', b.coins], ['Letras MACHÍN', got + '/' + LETTERS.length + (got === LETTERS.length ? ' ¡TODAS!' : '')], ['Tiempo', b.secs + ' s'], ['Bonus tiempo', b.time], ['Bonus corazones', b.hearts]];
-    rows.forEach(([k, v], i) => { if (G.t > 20 + i * 14) { txt(k, 190, 110 + i * 21); txt(String(v), 490, 110 + i * 21, { align: 'right', col: '#8affff' }); } });
+    rows.forEach(([k, v], i) => { if (G.t > 20 + i * 14) { txt(k, 190, 100 + i * 18); txt(String(v), 490, 100 + i * 18, { align: 'right', col: '#8affff' }); } });
     drawPresenter(12, 24, 110, 110, { t: G.t - 40 });
     drawChar(G.hero, G.t < 40 ? WIN[1] : winFrame(G.t), 580, 236, -1, 1);
-    txt('PUNTUACIÓN  ' + String(G.score).padStart(7, '0'), W / 2, 250, { size: 16, align: 'center' });
+    txt('PUNTUACIÓN  ' + String(G.score).padStart(7, '0'), W / 2, 214, { size: 16, align: 'center' });
+    // medallas: salen de una en una
+    MEDAL_INFO.forEach(([icon, name], i) => {
+      const t = G.t - MEDAL_T0 - i * 22; if (t < 0) return;
+      const x = W / 2 + (i - 1) * 150, m = L.medals[i];
+      drawMedal(x, 272, m, icon, { pop: m ? t / 10 : 1, alpha: Math.min(1, t / 6) });
+      txt(name, x, 292, { align: 'center', col: m ? '#ffe066' : '#6a6a8a', alpha: Math.min(1, t / 6) });
+      if (m === 2 && t > 10) txt('¡NUEVA!', x + 20, 262 + Math.sin(G.t * 0.2) * 2, { col: '#8aff8a', alpha: Math.min(1, (t - 10) / 6) });
+    });
     const next = LOCATIONS[G.levelIdx + 1];
-    if (next) txt('Siguiente parada: ' + next.short, W / 2, 290, { align: 'center', col: '#ffe066' });
-    if (G.t > 150 && G.t % 60 < 40) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / A', W / 2, 320, { align: 'center', col: '#ffffff' });
+    if (next) txt('Siguiente parada: ' + next.short, W / 2, 314, { align: 'center', col: '#ffe066' });
+    if (G.t > 150 && G.t % 60 < 40) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / A', W / 2, 336, { align: 'center', col: '#ffffff' });
   }
 
   // ---------------------------------------------------------- SPRITES GENERADOS
@@ -3328,6 +3477,32 @@
     Art.itemSprites.botijo = c;
   }
 
+  // ---------------------------------------------------------- CÁMARA LENTA
+  // Al tumbar a un jefe: el juego va a cámara lenta, la cámara se acerca al golpe final, bandas de cine y confeti.
+  const SLOW_DUR = 140, CONFETTI = ['#ff4a6a', '#ffe066', '#4ad0ff', '#8aff8a', '#ff8ab0', '#ffffff', '#b07aff'];
+  const slowBuf = document.createElement('canvas'); slowBuf.width = W; slowBuf.height = H; const slowCtx = slowBuf.getContext('2d');
+  function startSlowmo(x, y, label) {
+    G.slow = { t: 0, x, y, label };
+    L.shake = Math.min(L.shake, 6);
+    for (let i = 0; i < 110; i++) L.parts.push({ x: L.camX + rand(-20, VW + 20), y: L.camY - rand(0, 90), vx: rand(-0.6, 0.6), vy: rand(0, 1), life: rand(200, 300), col: pick(CONFETTI), s: rand(3, 5), g: 0.03, conf: true, ph: rand(0, 6) });
+  }
+  // ¿toca actualizar en este fotograma? (a 1/4 de velocidad y luego a 1/2 mientras dura)
+  function slowTick() {
+    const sl = G.slow; if (!sl) return true;
+    if (++sl.t >= SLOW_DUR) { G.slow = null; return true; }
+    return sl.t % (sl.t < SLOW_DUR * 0.65 ? 4 : 2) === 0;
+  }
+  function drawSlowmo() {
+    const sl = G.slow; if (!sl || !L) return;
+    const k = Math.max(0, Math.min(1, sl.t / 14, (SLOW_DUR - sl.t) / 30)), e = k * k * (3 - 2 * k), z = 1 + 0.3 * e;
+    const fx = Math.max(0, Math.min(W, (sl.x - L.camX) * Z)), fy = Math.max(0, Math.min(H, (sl.y - L.camY) * Z));
+    slowCtx.clearRect(0, 0, W, H); slowCtx.drawImage(cv, 0, 0, W, H);
+    ctx.drawImage(slowBuf, fx * (1 - z), fy * (1 - z), W * z, H * z);
+    if (sl.t < 6) { ctx.fillStyle = `rgba(255,255,255,${0.75 * (1 - sl.t / 6)})`; ctx.fillRect(0, 0, W, H); }
+    const bh = Math.round(40 * e); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, bh); ctx.fillRect(0, H - bh, W, bh);
+    if (sl.label && sl.t > 10) txt(sl.label, W / 2, H - bh + 12, { size: 16, align: 'center', col: '#ffe066', alpha: Math.min(1, (sl.t - 10) / 10, e) });
+  }
+
   // ---------------------------------------------------------- BUCLE PRINCIPAL
   function update() {
     Input.poll();
@@ -3343,6 +3518,7 @@
       case 'pause': updatePause(); break;
       case 'cutscene': G.t++; updateCutscene(); break;
       case 'clear': updateClear(); break;
+      case 'shop': updateShop(); break;
       case 'respawn': updateCommon(); L.enemies.forEach(e => { if (e.dead) updateEnemy(e); }); updateRespawn(); break;
       case 'gameover': updateGameover(); break;
       case 'ending': updateEnding(); updateBossIdle(); break;
@@ -3358,12 +3534,13 @@
       case 'difficulty': drawDifficulty(); break;
       case 'story': drawStory(); break;
       case 'intro': drawIntro(); break;
-      case 'play': case 'cutscene': case 'pause': case 'respawn': case 'gameover': case 'clear': case 'ending':
-        drawWorld(); drawHUD();
+      case 'play': case 'cutscene': case 'pause': case 'respawn': case 'gameover': case 'clear': case 'shop': case 'ending':
+        drawWorld(); drawSlowmo(); if (!G.slow && G.state !== 'shop') drawHUD();
         if (G.state === 'pause') drawPause();
         if (G.state === 'respawn') drawRespawn();
         if (G.state === 'gameover') drawGameover();
         if (G.state === 'clear') drawClear();
+        if (G.state === 'shop') drawShop();
         if (G.state === 'ending') drawEnding();
         break;
     }
@@ -3372,7 +3549,7 @@
   function frame(now) {
     acc += Math.min(100, now - last); last = now;
     let n = 0;
-    while (acc >= 1000 / 60 && n < 5) { if (!window.__freeze) update(); acc -= 1000 / 60; n++; }
+    while (acc >= 1000 / 60 && n < 5) { if (!window.__freeze && slowTick()) update(); acc -= 1000 / 60; n++; }
     render();
     requestAnimationFrame(frame);
   }
