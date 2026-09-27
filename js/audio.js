@@ -88,6 +88,9 @@ const Sound = (() => {
     throw() { noise({ t: 0.12, v: 0.25, f: 2500, f2: 5000, q: 2 }); },
     fire() { noise({ t: 0.18, v: 0.3, f: 800, f2: 3000, q: 1 }); tone({ type: 'square', f: 200, f2: 500, t: 0.1, v: 0.1 }); },
     splat() { noise({ t: 0.2, v: 0.35, f: 400, f2: 120, q: 1.5, type: 'lowpass' }); tone({ type: 'sine', f: 300, f2: 80, t: 0.15, v: 0.3 }); },
+    // chapuzón ligero (saltar dentro o fuera del agua) y oleaje de la marea
+    chof(v = 1) { noise({ t: 0.22, v: 0.3 * v, f: 2600, f2: 500, q: 0.8 }); noise({ t: 0.16, v: 0.25 * v, f: 450, type: 'lowpass' }); },
+    ola(v = 1) { noise({ t: 1.3, v: 0.16 * v, f: 300, f2: 1300, q: 0.5, type: 'lowpass' }); noise({ t: 0.9, v: 0.07 * v, f: 3200, f2: 1400, q: 0.4, at: 0.3 }); },
     checkpoint() { [67, 72, 76, 79, 84].forEach((n, i) => tone({ type: 'pulse25', f: mtof(n), t: 0.12, v: 0.18, at: i * 0.08 })); },
     mama() { tone({ type: 'triangle', f: 880, f2: 620, t: 0.12, v: 0.22 }); tone({ type: 'triangle', f: 740, f2: 440, t: 0.2, v: 0.22, at: 0.13, vib: 25 }); },
     select() { tone({ type: 'pulse25', f: 660, t: 0.05, v: 0.15 }); },

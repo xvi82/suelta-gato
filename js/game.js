@@ -43,7 +43,7 @@
     addEventListener('gamepadconnected', () => { padMsg = 'MANDO CONECTADO'; padMsgT = 180; });
     addEventListener('gamepaddisconnected', () => { padMsg = 'MANDO DESCONECTADO'; padMsgT = 180; });
     function poll() {
-      for (const a of ACTIONS) { prev[a] = cur[a]; cur[a] = !!kb[a] || !!virt[a]; }
+      for (const a of ACTIONS) { prev[a] = cur[a]; cur[a] = !!kb[a] || !!virt[a] || !!(window.TOUCH && window.TOUCH[a]); }
       cur.click = clicks > 0; clicks = 0;
       let pads = [];
       try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) { pads = []; }
@@ -73,6 +73,9 @@
       clear() { for (const a of ACTIONS) prev[a] = cur[a] = true; }, virt,
     };
   })();
+
+  // con el mando táctil a la vista, los textos de ayuda hablan de tocar la pantalla
+  const TCH = () => !!(window.TOUCH && window.TOUCH.active);
 
   // ---------------------------------------------------------- SPRITES
   const atlas = { normal: null, white: null, fire: null, rainbow: [], ghost: null };
@@ -581,7 +584,7 @@
       case 'cocido': P.cocido = true; addScore(1000); Sound.sfx.power(); break;
       case 'cafe': P.fastT = CAFE_T; addScore(1000); Sound.sfx.power(); break;
     }
-    const info = itemInfo(it.type); if (info) showBanner(it.type, info[0], info[1].replace('{K}', Input.pad ? 'Y (mando)' : 'V o L'));
+    const info = itemInfo(it.type); if (info) showBanner(it.type, info[0], info[1].replace('{K}', Input.pad ? 'Y (mando)' : TCH() ? 'LANZAR' : 'V o L'));
     parts(cx, cy, 16, ['#ffe066', '#ffffff', '#ff8ab0'], { sp: 3, up: 4 });
   }
   function updateItem(it) {
@@ -727,7 +730,17 @@
         case 'marea': {
           const ph = o.t % 420, lo = o.floor + 6, hi = o.floor - 38;
           o.level = ph < 170 ? lo : ph < 230 ? lo + (hi - lo) * ease((ph - 170) / 60) : ph < 330 ? hi : ph < 390 ? hi + (lo - hi) * ease((ph - 330) / 60) : lo;
-          if (ph === 160 && Math.abs(pcx - (o.x + o.w / 2)) < o.w / 2 + 260) { popText(o.x + o.w / 2, o.floor - 80, '¡QUE SUBE LA MAREA!', '#8affff'); Sound.sfx.splat(); }
+          const near = Math.abs(pcx - (o.x + o.w / 2)) < o.w / 2 + 260;
+          if (ph === 160 && near) { popText(o.x + o.w / 2, o.floor - 80, '¡QUE SUBE LA MAREA!', '#8affff'); Sound.sfx.splat(); }
+          if (near && (ph === 170 || ph === 205)) Sound.sfx.ola(ph === 170 ? 1 : 0.7);
+          if (near && ph === 330) Sound.sfx.ola(0.5);
+          // chorro de gotas al meterse o salir del agua (también en el charco con la marea baja)
+          const surf = Math.min(o.level, o.floor - 1), feet = P.y + P.h, inW = !P.dead && pcx > o.x && pcx < o.x + o.w && feet > surf + 1;
+          if (inW !== !!o.pIn) {
+            if (inW && P.vy > 0.5) tideSplash(pcx, surf, Math.min(1.6, 0.6 + P.vy / 8));
+            else if (!inW && P.vy < -1) tideSplash(pcx, surf, 0.7);
+          }
+          o.pIn = inW;
           if (!P.dead && pcx > o.x && pcx < o.x + o.w && P.y + P.h > o.level + 10 && P.inv <= 0 && P.starT <= 0) {
             addFx('agua', pcx, o.level + 6, { scale: 0.8 }); Sound.sfx.splat();
             hurtPlayer({ x: pcx + P.face * 10, w: 0 });
@@ -1068,10 +1081,75 @@
     ctx.fillStyle = 'rgba(40,150,230,0.5)'; ctx.fillRect(o.x, o.y, o.w, H + 40 - o.y);
     ctx.fillStyle = 'rgba(223,244,255,0.9)'; for (let i = 0; i < o.w - 6; i += 12) ctx.fillRect(o.x + i + ((t >> 2) % 6), o.y + Math.sin((i + t) * 0.12), 6, 1.5);
   }
+  function tideSplash(x, y, k = 1) {
+    const n = Math.round(8 + k * 8);
+    for (let i = 0; i < n; i++) {
+      const side = i % 2 ? 1 : -1, c = i < n / 3;
+      // un tercio sube recto (el chorro) y el resto sale en abanico hacia los lados
+      L.parts.push({ x: x + rand(-4, 4), y: y - 1, vx: c ? rand(-0.5, 0.5) : side * rand(0.8, 2.2) * k, vy: -(c ? rand(3.5, 5.5) : rand(1.5, 3.5)) * k, life: rand(22, 38), col: pick(['#ffffff', '#dff4ff', '#8ad8ff']), s: c ? 3 : 2, g: 0.28 });
+    }
+    if (k > 1) addFx('agua', x, y + 4, { scale: 0.6 * k });
+    Sound.sfx.chof(Math.min(1, k));
+  }
   function drawTide(o, t) {
-    const top = o.level, bottom = o.floor + 4; if (bottom <= top) return;
-    ctx.fillStyle = 'rgba(30,120,210,0.55)'; ctx.fillRect(o.x, top, o.w, bottom - top);
-    ctx.fillStyle = '#dff4ff'; for (let i = 0; i < o.w - 4; i += 8) ctx.fillRect(o.x + i, top + Math.sin((i + t * 2) * 0.1) * 1.5, 6, 2);
+    const ph = o.t % 420, bottom = o.floor + 4, prev = o.prevLevel ?? o.level;
+    const rising = o.level < prev - 0.05, falling = o.level > prev + 0.05, warn = ph >= 110 && ph < 170;
+    o.prevLevel = o.level;
+    // la marea nunca se va del todo: queda un charco fino que avisa del peligro
+    const top = Math.min(o.level, o.floor - 1), depth = bottom - top;
+    // al bajar deja la pared mojada, que se va secando poco a poco
+    o.wet = Math.min(o.wet ?? top, top); if (o.wet < top) o.wet = Math.min(top, o.wet + 0.12);
+    if (top - o.wet > 1) { ctx.fillStyle = 'rgba(20,40,80,0.22)'; ctx.fillRect(o.x, Math.round(o.wet), o.w, Math.round(top - o.wet) + 2); }
+    // superficie ondulada por columnas de 2 px (look pixel); más picada cuando sube
+    const amp = rising ? 2.4 : warn ? 1.8 : falling ? 1.2 : 1, surf = [];
+    for (let x = 0; x < o.w; x += 2) {
+      const a = Math.sin(x * 0.09 + t * 0.07), b = Math.sin(x * 0.23 - t * 0.11);
+      surf.push([x, Math.round(top + (a * 1.4 + b * 0.7) * amp), a]);
+    }
+    // distorsión: lo que queda bajo el agua ondula en bandas horizontales
+    if (depth > 6) {
+      const m = ctx.getTransform(), cw = ctx.canvas.width, ch = ctx.canvas.height;
+      const sx0 = Math.max(0, Math.round(m.a * o.x + m.e)), sx1 = Math.min(cw, Math.round(m.a * (o.x + o.w) + m.e));
+      if (sx1 > sx0) {
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+        for (let y = top + 3; y < bottom; y += 2) {
+          const sy = Math.round(m.d * y + m.f), bh = Math.ceil(m.d * 2); if (sy < 0 || sy + bh > ch) continue;
+          const dx = Math.round(Math.sin(y * 0.35 + t * 0.12) * m.a);
+          if (dx) ctx.drawImage(ctx.canvas, sx0, sy, sx1 - sx0, bh, sx0 + dx, sy, sx1 - sx0, bh);
+        }
+        ctx.restore();
+      }
+    }
+    const g = ctx.createLinearGradient(0, top - 3, 0, bottom);
+    g.addColorStop(0, 'rgba(95,195,245,0.62)'); g.addColorStop(0.3, 'rgba(38,128,212,0.64)'); g.addColorStop(1, 'rgba(14,58,138,0.82)');
+    ctx.fillStyle = g; for (const [x, y] of surf) ctx.fillRect(o.x + x, y, 2, bottom - y);
+    // brillo bajo la superficie y espuma en las crestas
+    ctx.fillStyle = 'rgba(200,240,255,0.35)'; for (const [x, y] of surf) ctx.fillRect(o.x + x, y + 2, 2, 1);
+    ctx.fillStyle = '#e8f8ff'; for (const [x, y, a] of surf) if (a > -0.2) ctx.fillRect(o.x + x, y - 1, 2, a > 0.75 ? 3 : 2);
+    ctx.fillStyle = '#ffffff'; for (const [x, y, a] of surf) if (a > 0.9 && ((x + (t >> 2)) & 6) === 0) ctx.fillRect(o.x + x, y - 3, 2, 2);
+    if (depth > 12) {
+      // destellos de luz que se mueven por el fondo
+      for (let i = 0; i < o.w / 18; i++) {
+        const k = Math.sin(t * 0.06 + i * 1.7); if (k < 0.2) continue;
+        ctx.fillStyle = `rgba(210,245,255,${(k * 0.28).toFixed(2)})`;
+        const cx = o.x + ((i * 53 + t * 0.35) % o.w), cy = top + 6 + ((i * 29) % Math.max(1, depth - 10));
+        ctx.fillRect(Math.round(cx), Math.round(cy), 5, 1); ctx.fillRect(Math.round(cx) + 2, Math.round(cy) + 1, 3, 1);
+      }
+    }
+    // burbujas: avisan antes de subir y salen mientras sube
+    if (rising || warn) {
+      ctx.fillStyle = 'rgba(230,248,255,0.8)';
+      for (let i = 0; i < o.w / 24; i++) {
+        const p = ((t + i * 23) % 50) / 50, by = bottom - 2 - p * (depth + 4);
+        if (by < top + 1) continue;
+        const bx = Math.round(o.x + 4 + ((i * 71) % (o.w - 8)) + Math.sin(t * 0.2 + i) * 1.5);
+        ctx.fillRect(bx, Math.round(by), 2, 2);
+      }
+    }
+    // chapoteo contra las paredes del hoyo
+    const sp = rising ? 3 + Math.abs(Math.sin(t * 0.25)) * 4 : 1 + Math.abs(Math.sin(t * 0.1)) * 1.5;
+    ctx.fillStyle = '#e8f8ff';
+    for (const ex of [o.x, o.x + o.w - 4]) { ctx.fillRect(ex, Math.round(top - sp), 4, Math.round(sp) + 1); ctx.fillRect(ex + (ex === o.x ? 4 : -2), Math.round(top - sp / 2), 2, 2); }
   }
   function drawSlide(o, t) {
     const x0 = o.x, x1 = o.x + o.w, y0 = o.y0 + T / 2, y1 = o.y1 + T / 2;
@@ -1082,17 +1160,36 @@
     ctx.lineCap = 'butt';
   }
   function drawBunker(o) {
-    const gy = surfaceRow(Math.floor(o.x / T)) * T; if (gy < 0) return;
-    ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.ellipse(o.x + o.w / 2, gy + 1, o.w / 2 + 4, 8, 0, Math.PI, 0); ctx.fill();
-    ctx.fillStyle = '#f0dca0'; ctx.beginPath(); ctx.ellipse(o.x + o.w / 2, gy + 1, o.w / 2 + 2, 6.5, 0, Math.PI, 0); ctx.fill();
-    ctx.fillRect(o.x - 2, gy, o.w + 4, 5);
-    ctx.fillStyle = '#d8b870'; for (let i = 6; i < o.w; i += 9) ctx.fillRect(o.x + i, gy - 3 + (i % 3), 2, 1);
+    // hoya de arena hundida en el césped: la superficie queda a ras del suelo para que se pise igual
+    const row = surfaceRow(Math.floor(o.x / T)); if (row < 0) return;
+    const gy = row * T, cx = o.x + o.w / 2, rx = o.w / 2 + 6, ry = 11;
+    const hash = n => { const s = Math.sin(n * 127.1 + o.x * 0.37) * 43758.5453; return s - Math.floor(s); };
+    const half = (x, y, a, b) => { ctx.beginPath(); ctx.ellipse(x, y, a, b, 0, 0, Math.PI); ctx.fill(); };
+    ctx.fillStyle = '#4a2e18'; half(cx, gy, rx + 2, ry + 2);
+    ctx.fillStyle = '#8a5a2e'; half(cx, gy, rx + 1, ry + 1);
+    const g = ctx.createLinearGradient(0, gy, 0, gy + ry); g.addColorStop(0, '#fbecc0'); g.addColorStop(1, '#d4ad66');
+    ctx.fillStyle = g; half(cx, gy, rx, ry);
+    // surcos del rastrillo, siguiendo la curva de la hoya
+    ctx.fillStyle = 'rgba(176,132,70,0.45)';
+    for (const d of [4, 7.5]) { const hw = rx * Math.sqrt(1 - (d / ry) ** 2) - 4; for (let x = -hw; x < hw; x += 5) ctx.fillRect(cx + x, gy + d + Math.sin(x * 0.25) * 0.6, 3, 1); }
+    // granos sueltos
+    for (let i = 0; i < o.w / 2; i++) {
+      const u = hash(i) * 2 - 1, v = hash(i + 99), hw = Math.sqrt(1 - v * v);
+      ctx.fillStyle = i % 3 ? '#c49a56' : '#fff6da'; ctx.fillRect(Math.round(cx + u * hw * (rx - 3)), Math.round(gy + 1 + v * (ry - 3)), 1, 1);
+    }
+    ctx.fillStyle = '#fff8e0'; ctx.fillRect(cx - rx + 3, gy, 2 * rx - 6, 1);
+    // matas de hierba que asoman por los bordes
+    for (const s of [-1, 1]) {
+      const ex = cx + s * rx;
+      ctx.fillStyle = '#1f5a24'; ctx.beginPath(); ctx.moveTo(ex - 5, gy + 1); ctx.lineTo(ex - 3 * s, gy - 5); ctx.lineTo(ex, gy - 2); ctx.lineTo(ex + 2 * s, gy - 6); ctx.lineTo(ex + 5, gy + 1); ctx.fill();
+      ctx.fillStyle = '#4caf3c'; ctx.beginPath(); ctx.moveTo(ex - 3, gy + 1); ctx.lineTo(ex - 2.5 * s, gy - 3.5); ctx.lineTo(ex, gy - 1); ctx.lineTo(ex + 1.5 * s, gy - 4.5); ctx.lineTo(ex + 3, gy + 1); ctx.fill();
+    }
   }
   function drawHole(o, t) {
     const cx = o.x + o.w / 2, gy = o.y, wave = Math.sin(t * 0.12) * 2;
     ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.ellipse(cx, gy + 1, 9, 3, 0, 0, Math.PI * 2); ctx.fill();
     const im = elem('obj_golf', o.done ? 1 : 0);
-    if (im) { const ih = 72, iw = im.width / im.height * ih; spr(im, cx - iw * (o.done ? 0.2 : 0.13), gy + 3 - ih, iw, ih); return; }
+    if (im) { const ih = 50, iw = im.width / im.height * ih; spr(im, cx - iw * (o.done ? 0.2 : 0.13), gy + 3 - ih, iw, ih); return; }
     ctx.fillRect(cx - 1.5, gy - 70, 3, 70); ctx.fillStyle = '#f0f0f0'; ctx.fillRect(cx - 0.5, gy - 69, 1.5, 68);
     ctx.fillStyle = '#1b1426'; ctx.beginPath(); ctx.moveTo(cx + 1, gy - 71); ctx.lineTo(cx + 24, gy - 63 + wave); ctx.lineTo(cx + 1, gy - 54); ctx.fill();
     ctx.fillStyle = o.done ? '#ffd23f' : '#e0303a'; ctx.beginPath(); ctx.moveTo(cx + 1.5, gy - 69); ctx.lineTo(cx + 21, gy - 63 + wave); ctx.lineTo(cx + 1.5, gy - 56); ctx.fill();
@@ -1130,7 +1227,7 @@
       const up = !isSolidTile(at(c, r - 1)), x = c * T - 2, w = 2 * T + 4, top = r * T, bot = (r1 + 1) * T;
       const im = elem(kind + (up ? 'boca' : 'base')), ih = im.height / Z * w / (im.width / Z);
       ctx.save(); ctx.beginPath(); ctx.rect(x - 4, up ? top - 6 : top, w + 8, bot - top + (up ? 6 + T : 6)); ctx.clip();
-      spr(im, x, up ? top - 3 : bot + 3 - ih, w, up ? Math.max(ih, bot - top + 8) : ih);
+      spr(im, x, up ? top + 4 : bot + 3 - ih, w, up ? Math.max(ih, bot - top + 8) : ih);
       ctx.restore();
       return;
     }
@@ -2778,7 +2875,7 @@
       txt(G.score >= G.hi ? '¡NUEVO RÉCORD!' : 'RÉCORD: ' + G.hi, W / 2, 230, { align: 'center', col: '#ff8ab0', alpha: a });
       txt('¡GRACIAS POR JUGAR!', W / 2, 272, { size: 16, align: 'center', col: '#ffffff', alpha: a });
       drawPresenter(14, 20, 150, 96, { alpha: a, noCaption: true, caption: '¡BRAVO!' });
-      if (e > 700 && G.t % 60 < 40) txt('PULSA ENTER / START', W / 2, 310, { align: 'center', col: '#ffe066' });
+      if (e > 700 && G.t % 60 < 40) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / START', W / 2, 310, { align: 'center', col: '#ffe066' });
     }
   }
 
@@ -2799,6 +2896,13 @@
     ctx.restore();
   }
   function drawCover(img) { const k = Math.max(W / img.width, H / img.height); ctx.imageSmoothingEnabled = true; ctx.drawImage(img, (W - img.width * k) / 2, (H - img.height * k) / 2, img.width * k, img.height * k); ctx.imageSmoothingEnabled = false; }
+  // en iPhone no hay pantalla completa desde la web: se explica cómo añadir el juego a la pantalla de inicio
+  function iosHint(y) {
+    if (!(window.TOUCH && TOUCH.iosHint)) return;
+    ctx.fillStyle = 'rgba(12,8,24,0.72)'; ctx.fillRect(W / 2 - 180, y - 5, 360, 32);
+    txt('Para jugar a pantalla completa, en Safari:', W / 2, y, { align: 'center', col: '#ffffff' });
+    txt('Compartir > Añadir a pantalla de inicio', W / 2, y + 13, { align: 'center', col: '#8affff' });
+  }
   function drawTitle() {
     if (titleBg === null) titleBg = Math.floor(Math.random() * LOCATIONS.length);
     const ini = photos.inicio;
@@ -2807,9 +2911,10 @@
       const g = ctx.createLinearGradient(0, 0, 0, 170); g.addColorStop(0, 'rgba(12,8,24,0.45)'); g.addColorStop(1, 'rgba(12,8,24,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, 170);
       logo(24);
       txt('Una aventura de puñetazos, chanclas y pesetas', W / 2, 102, { align: 'center', col: '#ffffff' });
-      if (G.t % 70 < 48) txt('PULSA ENTER O START', W / 2, 124, { size: 16, align: 'center', col: '#ffe066' });
+      if (G.t % 70 < 48) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER O START', W / 2, 124, { size: 16, align: 'center', col: '#ffe066' });
+      iosHint(150);
       ctx.fillStyle = 'rgba(12,8,24,0.72)'; ctx.fillRect(0, H - 22, W, 22);
-      const lines = ['FLECHAS/WASD  ABAJO agacharse  ZXCV/HJKL: saltar, puño, patada, lanzar', 'MANDO: ABAJO agacharse  A saltar  X puño  B patada  Y/RB lanzar  START pausa'];
+      const lines = TCH() ? ['JOYSTICK mover   ABAJO agacharse   BOTONES saltar, puño, patada, lanzar', 'Botones de arriba: música, pantalla completa y pausa'] : ['FLECHAS/WASD  ABAJO agacharse  ZXCV/HJKL: saltar, puño, patada, lanzar', 'MANDO: ABAJO agacharse  A saltar  X puño  B patada  Y/RB lanzar  START pausa'];
       txt(lines[Math.floor(G.t / 240) % 2], W / 2, H - 15, { align: 'center', col: Math.floor(G.t / 240) % 2 ? '#8affff' : '#ffffff' });
       txt('RÉCORD ' + String(G.hi).padStart(7, '0'), W - 8, 6, { align: 'right', col: '#ff8ab0' });
       return;
@@ -2821,10 +2926,11 @@
     drawChar('boy', IDLE[Math.floor(G.t / 12) % 4], 120, 254, 1, 1.5);
     drawChar('girl', IDLE[Math.floor(G.t / 12 + 2) % 4], 520, 254, -1, 1.5);
     drawChar('cat', IDLE[Math.floor(G.t / 14) % 4], 320, 258, 1, 1.05);
-    if (G.t % 70 < 48) txt('PULSA ENTER O START', W / 2, 134, { size: 16, align: 'center', col: '#ffe066' });
+    if (G.t % 70 < 48) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER O START', W / 2, 134, { size: 16, align: 'center', col: '#ffe066' });
+    iosHint(158);
     box(96, 296, 448, 58, '#1b1426', '#ffe066');
-    txt('FLECHAS/WASD mover   ABAJO agacharse', W / 2, 304, { align: 'center', col: '#ffffff' });
-    txt('ZXCV o HJKL: saltar, puño, patada, lanzar', W / 2, 318, { align: 'center', col: '#ffffff' });
+    txt(TCH() ? 'JOYSTICK mover   ABAJO agacharse' : 'FLECHAS/WASD mover   ABAJO agacharse', W / 2, 304, { align: 'center', col: '#ffffff' });
+    txt(TCH() ? 'BOTONES: saltar, puño, patada, lanzar' : 'ZXCV o HJKL: saltar, puño, patada, lanzar', W / 2, 318, { align: 'center', col: '#ffffff' });
     txt('MANDO  A saltar  X puño  B patada  Y/RB lanzar', W / 2, 334, { align: 'center', col: '#8affff' });
     txt('RÉCORD ' + String(G.hi).padStart(7, '0'), W - 8, 6, { align: 'right', col: '#ff8ab0' });
   }
@@ -2858,7 +2964,7 @@
       }
       txt('Rescata a ' + NAMES[who === 'boy' ? 'girl' : 'boy'], cx, by + bh - 18, { align: 'center', col: '#8aff8a' });
     });
-    txt('IZQ/DER elegir     ENTER/A confirmar', W / 2, 340, { align: 'center', col: '#c8c8e0' });
+    txt(TCH() ? 'JOYSTICK elegir     TOCA / SALTO confirmar' : 'IZQ/DER elegir     ENTER/A confirmar', W / 2, 340, { align: 'center', col: '#c8c8e0' });
   }
   function updateDifficulty() {
     G.t++;
@@ -2881,7 +2987,7 @@
       if (sel && G.t % 40 < 28) txt('>', 89, y + 14, { col: '#ffe066' });
     });
     txt('Tienes 5 vidas en todas las dificultades', W / 2, 322, { align: 'center', col: '#ff8ab0' });
-    txt('ARRIBA/ABAJO elegir   ENTER/A empezar   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
+    txt(TCH() ? 'JOYSTICK elegir   TOCA / SALTO empezar   PATADA volver' : 'ARRIBA/ABAJO elegir   ENTER/A empezar   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
   }
 
   // --- historia inicial
@@ -2968,8 +3074,8 @@
       const off = (s.t * 2) % (ticker.length * 8);
       txt(ticker + ticker, 8 - off, 307, { col: '#ffffff' });
     }
-    if (s.hold && s.holdT > 30 && G.t % 50 < 34) txt('PULSA A / ESPACIO PARA SEGUIR', W / 2, H - 26, { align: 'center', col: '#ffe066' });
-    txt('B / ESC: saltar la historia', W - 10, H - 12, { align: 'right', col: '#8a8aa8' });
+    if (s.hold && s.holdT > 30 && G.t % 50 < 34) txt(TCH() ? 'TOCA LA PANTALLA PARA SEGUIR' : 'PULSA A / ESPACIO PARA SEGUIR', W / 2, H - 26, { align: 'center', col: '#ffe066' });
+    txt(TCH() ? 'PATADA: saltar la historia' : 'B / ESC: saltar la historia', W - 10, H - 12, { align: 'right', col: '#8a8aa8' });
   }
 
   // --- intro de nivel
@@ -3044,7 +3150,7 @@
   }
   function updateGameover() {
     G.t++;
-    if (G.t > 60 && Input.pressed('start')) { G.lives = 5; G.score = 0; startLevelIntro(); return; }
+    if (G.t > 60 && (Input.pressed('start') || (TCH() && G.t < 660 && Input.confirm()))) { G.lives = 5; G.score = 0; startLevelIntro(); return; }
     if (G.t > 60 && (Input.pressed('jump') || Input.pressed('punch')) && G.t > 660) { G.state = 'title'; G.t = 0; Sound.play('title'); }
     if (G.t > 660 + 60 * 5) { G.state = 'title'; G.t = 0; Sound.play('title'); }
   }
@@ -3058,8 +3164,8 @@
     const cd = Math.max(0, 10 - Math.floor(G.t / 66));
     if (G.t < 660) {
       txt('¿CONTINUAR?  ' + cd, W / 2, 256, { size: 16, align: 'center', col: '#ffe066' });
-      txt('Pulsa ENTER / START (la puntuación vuelve a 0)', W / 2, 284, { align: 'center', col: '#c8c8e0' });
-    } else txt('Pulsa ESPACIO / A para volver al título', W / 2, 284, { align: 'center', col: '#c8c8e0' });
+      txt(TCH() ? 'Toca la pantalla (la puntuación vuelve a 0)' : 'Pulsa ENTER / START (la puntuación vuelve a 0)', W / 2, 284, { align: 'center', col: '#c8c8e0' });
+    } else txt(TCH() ? 'Pulsa SALTO para volver al título' : 'Pulsa ESPACIO / A para volver al título', W / 2, 284, { align: 'center', col: '#c8c8e0' });
     txt('PUNTUACIÓN ' + G.score + '   RÉCORD ' + G.hi, W / 2, 320, { align: 'center', col: '#8affff' });
   }
 
@@ -3075,7 +3181,7 @@
     txt('PUNTUACIÓN  ' + String(G.score).padStart(7, '0'), W / 2, 250, { size: 16, align: 'center' });
     const next = LOCATIONS[G.levelIdx + 1];
     if (next) txt('Siguiente parada: ' + next.short, W / 2, 290, { align: 'center', col: '#ffe066' });
-    if (G.t > 150 && G.t % 60 < 40) txt('PULSA ENTER / A', W / 2, 320, { align: 'center', col: '#ffffff' });
+    if (G.t > 150 && G.t % 60 < 40) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / A', W / 2, 320, { align: 'center', col: '#ffffff' });
   }
 
   // ---------------------------------------------------------- SPRITES GENERADOS
@@ -3112,7 +3218,7 @@
   function update() {
     Input.poll();
     if (Input.pressed('mute')) Sound.toggleMusic();
-    if (Input.pressed('full')) { try { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen(); } catch (e) {} }
+    if (Input.pressed('full')) { try { if (window.toggleFullscreen) toggleFullscreen(); else if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen(); } catch (e) {} }
     switch (G.state) {
       case 'title': updateTitle(); break;
       case 'select': updateSelect(); break;
