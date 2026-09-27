@@ -188,6 +188,103 @@
   // aparición del presentador en una esquina durante la partida
   function presenterPop(idx, dur = 170) { if (!L) return; L.pres = { idx, t: 0, dur }; Sound.sfx.select(); }
 
+  // ---------------------------------------------------------- MAMÁ
+  // A veces, cuando al héroe le hacen daño, Mamá asoma por la esquina de abajo a la derecha.
+  // Poses de la hoja (originales/mama.png -> js/mama.js): 0 preocupada, 1 ¡ay, Dios!, 2 regañando, 3 con el abrigo;
+  // la fila 2 (opcional) repite las poses con la boca cerrada. {H} = nombre del héroe, {o} = o/a según sea chico o chica.
+  const mamaImg = new Image(), MAMA_SIZE = 116, MAMA_COOL = 8 * 60;
+  const MAMA_LINES = [
+    [0, '¡{H}, ten cuidado!'], [0, '¡{H}, mira por dónde vas!'], [0, '¡Que me vas a matar a disgustos!'], [0, '¡{H}, hij{o} mí{o}, despacito!'], [0, '¿Te has hecho pupa, cariño?'],
+    [1, '¡Ay, Dios!'], [1, '¡Ay, Dios mío de mi vida!'], [1, '¡Esto no puede ser!'], [1, '¡Virgen santa!'], [1, '¡Ay, que me da algo!'],
+    [2, '¿Cómo te has puesto esos zapatos?'], [2, '¡Te lo dije! ¡Te lo dije!'], [2, '¿Y quién te manda a ti meterte ahí?'], [2, '¡Ya verás cuando se entere tu padre!'], [2, '¡Con lo bien que estabas en casa!'],
+    [3, '¿Te has abrigado?'], [3, '¡Ponte la chaqueta, que te vas a constipar!'], [3, '¿Has comido algo? ¡Te he dejado un táper!'], [3, '¡Que no te dé el aire en la garganta!'],
+    [3, '¡Cuando llegues a casa te hago un puré!'], [3, '¡Mira qué pelos! ¿No te has peinado?'], [3, '¡Te he metido un bocata en la mochila!'],
+  ];
+  function mamaLines(why) {
+    const loc = L.loc, out = [];
+    if (why === 'dead') out.push([1, '¡{H}! ¡Ay, mi niñ{o}!'], [1, '¡Levántate, que el suelo está frío!'], [1, '¡Que alguien llame a un médico!']);
+    if (why === 'last') out.push([1, '¡{H}, que te queda un corazón!'], [0, '¡{H}, vuelve a casa ya!']);
+    if (why === 'bocata') out.push([2, '¡Ese bocata era para la merienda!']);
+    if (L.boss || L.miniFight === 'on') out.push([2, '¡Oye, tú! ¡A mi niñ{o} no me l{o} toques!'], [2, '¡Machín, gato malo! ¡Sin pienso te vas a quedar!']);
+    if (loc.snow || loc.painter === 'teide') out.push([3, '¿Sin gorro? ¡Que aquí arriba hace un frío que pela!'], [3, '¡Ponte la bufanda, {H}!']);
+    if (loc.hazard === 'water') out.push([2, '¡No te bañes, que acabas de comer!'], [3, '¿Te has puesto crema? ¡Que te quemas!']);
+    if (loc.painter === 'madrid' || loc.painter === 'warner') out.push([0, '¡No te separes, que hay mucha gente!']);
+    return out;
+  }
+  function mamaPop(why = 'hurt') {
+    if (!L || L.mama || L.mamaCool > 0 || G.state !== 'play') return;
+    const chance = !G.mamaSeen ? 1 : why === 'dead' ? 0.7 : why === 'last' ? 0.6 : 0.35;
+    if (Math.random() > chance) return;
+    const special = mamaLines(why), pool = special.length && Math.random() < 0.6 ? special : MAMA_LINES;
+    let line; do line = pick(pool); while (pool.length > 1 && line[1] === G.mamaLast);
+    G.mamaSeen = true; G.mamaLast = line[1];
+    const name = NAMES[G.hero][0] + NAMES[G.hero].slice(1).toLowerCase(), o = G.hero === 'boy' ? 'o' : 'a';
+    const text = line[1].replace(/\{H\}/g, name).replace(/\{o\}/g, o);
+    L.mama = { pose: line[0], text, t: 0, dur: why === 'dead' ? 148 : 120 + text.length * 3 }; // al morir, antes de la pantalla de vidas
+    Sound.sfx.mama();
+  }
+  function updateMama() {
+    if (L.mamaCool > 0) L.mamaCool--;
+    const m = L.mama; if (!m) return;
+    if (++m.t >= m.dur) { L.mama = null; L.mamaCool = MAMA_COOL; }
+  }
+  // Mamá provisional (hasta que exista originales/mama.png): pixel-art en rejilla de 32x32
+  let mamaFallback = null;
+  function buildMamaFallback() {
+    const out = [];
+    for (let open = 1; open >= 0; open--) for (let pose = 0; pose < 4; pose++) {
+      const c = Art.canvas(32, 32), x = c.getContext('2d'), R = (col, a, b, w, h) => { x.fillStyle = col; x.fillRect(a, b, w, h); };
+      const SKIN = '#f2c29a', HAIR = '#5a3020', CARD = '#c0406a', DARK = '#1b1426';
+      R(CARD, 8, 22, 16, 10); R(CARD, 6, 25, 20, 7); R('#ffffff', 13, 21, 6, 3); R('#8a2a4a', 15, 24, 2, 8);
+      for (let i = 0; i < 5; i++) R('#fff4e0', 11 + i * 2, 22 + (i === 0 || i === 4 ? 0 : 1), 1, 1); // collar de perlas
+      R(HAIR, 9, 4, 14, 6); R(HAIR, 8, 7, 3, 11); R(HAIR, 21, 7, 3, 11); R(HAIR, 10, 3, 4, 2); R(HAIR, 17, 3, 4, 2);
+      R(SKIN, 11, 8, 10, 12); R(SKIN, 14, 19, 4, 2); R(HAIR, 11, 8, 10, 2);
+      R('#f0a0a0', 11, 15, 2, 1); R('#f0a0a0', 19, 15, 2, 1);
+      if (pose === 1) { R(DARK, 12, 11, 3, 1); R(DARK, 17, 11, 3, 1); } // cejas arriba
+      else if (pose === 2) { R(DARK, 12, 11, 3, 1); R(DARK, 17, 11, 3, 1); R(DARK, 14, 12, 1, 1); R(DARK, 17, 12, 1, 1); } // ceño
+      else { R(DARK, 12, 12, 3, 1); R(DARK, 17, 12, 3, 1); }
+      R(DARK, 13, 13, 1, 2); R(DARK, 17, 13, 1, 2); R('#ffffff', 12, 13, 1, 1); R('#ffffff', 16, 13, 1, 1);
+      if (open) { R(DARK, 14, 16, 4, 3); R('#d84a5a', 15, 17, 2, 2); } else R('#a03040', 14, 17, 4, 1);
+      if (pose === 0) { R(SKIN, 12, 24, 8, 3); R('#d8a07a', 15, 24, 2, 3); } // manos juntas
+      if (pose === 1) { R(CARD, 6, 16, 4, 9); R(CARD, 22, 16, 4, 9); R(SKIN, 8, 13, 3, 5); R(SKIN, 21, 13, 3, 5); } // manos en la cara
+      if (pose === 2) { R(CARD, 4, 16, 4, 9); R(SKIN, 3, 11, 5, 5); R(SKIN, 4, 6, 2, 5); } // dedo levantado
+      if (pose === 3) { R('#3a6ad0', 1, 18, 12, 14); R('#2a4a9a', 1, 18, 12, 2); R('#ffe066', 6, 22, 1, 1); R('#ffe066', 6, 26, 1, 1); R(SKIN, 10, 20, 4, 3); } // el abrigo
+      out.push(c);
+    }
+    return out;
+  }
+  function drawMama(m) {
+    const S = MAMA_SIZE, inK = Math.min(1, m.t / 14, (m.dur - m.t) / 14), e = 1 - Math.pow(1 - Math.max(0, inK), 3);
+    const talking = m.t > 10 && m.t < 10 + m.text.length * 3, open = talking ? Math.floor(m.t / 6) % 2 === 0 : m.pose === 1;
+    const shake = m.pose === 1 && m.t < 30 ? Math.round(Math.sin(m.t * 1.7) * 2) : 0;
+    const x = Math.round(W - S * 0.92 + (1 - e) * S) + shake, y = Math.round(H - S + Math.sin(m.t * 0.25) * (talking ? 1.5 : 0.5));
+    ctx.imageSmoothingEnabled = true;
+    if (window.MAMA_ATLAS && mamaImg.width) {
+      const C = window.MAMA_CELL, row = (window.MAMA_ROWS || 1) > 1 && !open ? 1 : 0;
+      ctx.drawImage(mamaImg, m.pose * C, row * C, C, C, x, y, S, S);
+    } else {
+      if (!mamaFallback) mamaFallback = buildMamaFallback();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(mamaFallback[(open ? 0 : 4) + m.pose], x, y, S, S);
+    }
+    ctx.imageSmoothingEnabled = false;
+    // cartel con el nombre
+    const lx = x + S / 2 - 26; ctx.fillStyle = '#1b1426'; ctx.fillRect(lx, H - 16, 52, 14); ctx.fillStyle = '#ff7ab0'; ctx.fillRect(lx, H - 16, 52, 2);
+    txt('MAMÁ', lx + 26, H - 12, { align: 'center', col: '#ffb0d8' });
+    // bocadillo a su izquierda, con el pico hacia ella
+    if (m.t < 8) return;
+    const lines = wrap(m.text, 20), bw = Math.max(...lines.map(l => l.length)) * 8 + 16, bh = lines.length * 11 + 12;
+    const bx = x - bw - 10, by = Math.max(54, y + 8 - bh / 2), pop = Math.min(1, (m.t - 8) / 6, (m.dur - m.t) / 8);
+    ctx.save(); ctx.translate(bx + bw, by + bh / 2); ctx.scale(pop, pop); ctx.translate(-(bx + bw), -(by + bh / 2));
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(bx + 3, by + 3, bw + 2, bh + 2);
+    ctx.fillStyle = '#1b1426'; ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
+    ctx.fillStyle = '#fff4fa'; ctx.fillRect(bx, by, bw, bh); ctx.fillStyle = '#ffd6ea'; ctx.fillRect(bx, by + bh - 3, bw, 3);
+    const ty = Math.round(by + bh / 2 - 4);
+    ctx.fillStyle = '#1b1426'; ctx.fillRect(bx + bw, ty - 2, 9, 10); ctx.fillStyle = '#fff4fa'; ctx.fillRect(bx + bw, ty, 6, 6);
+    lines.forEach((l, i) => txt(l, bx + 8, by + 7 + i * 11, { col: '#1b1426', sh: null }));
+    ctx.restore();
+  }
+
   // ---------------------------------------------------------- ESTADO
   const G = {
     state: 'loading', t: 0, diff: 'normal', hero: 'boy', lives: 5, score: 0, pesetas: 0, levelIdx: 0, menu: 0, hi: 0,
@@ -429,7 +526,7 @@
     gazpacho: ['¡GAZPACHO FRESQUITO!', 'Los bichos se quedan congelados unos segundos. ¡Y el reloj también!'],
     paella: ['¡PAELLA DE LA ABUELA!', 'Tres paelleras te dan vueltas y te hacen de escudo: aguantan 3 golpes.'],
     cocido: ['¡COCIDO MADRILEÑO!', 'Con tanta energía puedes saltar otra vez en el aire. ¡Doble salto!'],
-    cafe: ['¡CAFÉ CON LECHE!', 'Corres mucho más rápido durante 20 segundos.'],
+    cafe: ['¡BARRAQUITO!', 'Café, leche condensada y un chorrito de energía canaria: corres mucho más rápido durante 20 segundos.'],
   };
   const FREEZE_T = 360, CAFE_T = 1200;
   function gainPeseta(cx, cy) {
@@ -453,6 +550,14 @@
       showBanner('letra' + it.letter, '¡LETRA ' + LETTERS[it.letter] + '!', 'Junta las 6 letras M-A-C-H-Í-N en este nivel y ganarás una vida extra y 5000 puntos.');
     }
   }
+  // En la nieve el barraquito se sirve como chocolate caliente: mismo sprite y mismo efecto
+  const SNOW_CAFE = ['¡CHOCOLATE CALIENTE!', 'Espeso y bien calentito para el frío: corres mucho más rápido durante 20 segundos.'];
+  const snowy = () => !!(LOCATIONS[G.levelIdx] && LOCATIONS[G.levelIdx].snow);
+  // En Las Palmas a las chanclas se les dice cholas
+  const CHOLA = ['¡LA CHOLA DE LA ABUELA!', 'Pulsa {K} para lanzar cholas. Cada una que cojas trae 10.'];
+  const canario = () => !!(LOCATIONS[G.levelIdx] && LOCATIONS[G.levelIdx].painter === 'laspalmas');
+  const itemInfo = type => type === 'cafe' && snowy() ? SNOW_CAFE : type === 'chancla' && canario() ? CHOLA : ITEM_INFO[type];
+  const cafeName = () => snowy() ? 'CHOCOLATE CALIENTE' : 'BARRAQUITO';
   function collectItem(it) {
     it.remove = true;
     if (it.letter !== undefined) { collectLetter(it); return; }
@@ -476,7 +581,7 @@
       case 'cocido': P.cocido = true; addScore(1000); Sound.sfx.power(); break;
       case 'cafe': P.fastT = CAFE_T; addScore(1000); Sound.sfx.power(); break;
     }
-    const info = ITEM_INFO[it.type]; if (info) showBanner(it.type, info[0], info[1].replace('{K}', Input.pad ? 'Y (mando)' : 'V o L'));
+    const info = itemInfo(it.type); if (info) showBanner(it.type, info[0], info[1].replace('{K}', Input.pad ? 'Y (mando)' : 'V o L'));
     parts(cx, cy, 16, ['#ffe066', '#ffffff', '#ff8ab0'], { sp: 3, up: 4 });
   }
   function updateItem(it) {
@@ -1505,7 +1610,7 @@
       Sound.sfx.fire(); return true;
     }
     if (P.weapon === 'chancla' && P.ammo > 0) {
-      P.ammo--; if (!P.ammo) { P.weapon = null; popText(cx, P.y - 20, '¡SIN CHANCLAS!', '#ffffff'); }
+      P.ammo--; if (!P.ammo) { P.weapon = null; popText(cx, P.y - 20, canario() ? '¡SIN CHOLAS!' : '¡SIN CHANCLAS!', '#ffffff'); }
       L.projs.push({ kind: 'chancla', owner: 'p', x: cx + P.face * 10 - 12, y, w: 24, h: 14, vx: P.face * 6.5, vy: -2.2, g: 0.12, t: 0, dmg: 2, rot: 0 });
       Sound.sfx.throw(); return true;
     }
@@ -1528,18 +1633,19 @@
     P.hurtT = 30; P.inv = 100; P.act = null;
     P.vx = (P.x + P.w / 2 < sx ? -1 : 1) * 3; P.vy = -4.5;
     L.shake = 8;
-    if (P.power === 'fire') { setPower('big'); Sound.sfx.powerdown(); popText(P.x + P.w / 2, P.y - 12, '¡SE ACABÓ EL MOJO!', '#ffffff'); return; }
-    if (P.power === 'big') { setPower('none'); Sound.sfx.powerdown(); popText(P.x + P.w / 2, P.y - 12, '¡ADIÓS BOCATA!', '#ffffff'); return; }
+    if (P.power === 'fire') { setPower('big'); Sound.sfx.powerdown(); popText(P.x + P.w / 2, P.y - 12, '¡SE ACABÓ EL MOJO!', '#ffffff'); mamaPop(); return; }
+    if (P.power === 'big') { setPower('none'); Sound.sfx.powerdown(); popText(P.x + P.w / 2, P.y - 12, '¡ADIÓS BOCATA!', '#ffffff'); mamaPop('bocata'); return; }
     P.hearts--; Sound.sfx.hurt();
     popText(P.x + P.w / 2, P.y - 12, pick(['¡AY!', '¡AUCH!', '¡QUÉ DAÑO, BRO!', '¡MI MADRE!', '¡LITERALMENTE ME HA DOLIDO!', '¡POR LA CARÍSIMA, QUÉ DAÑO!', '¡BRO, EN SERIO?!']), '#ff8a8a');
     if (P.weapon === 'churro' && P.hearts > 0) { P.weapon = null; popText(P.x + P.w / 2, P.y - 26, '¡MI CHURRO!', '#ffe066'); }
     if (P.hearts <= 0) killPlayer();
+    else mamaPop(P.hearts === 1 ? 'last' : 'hurt');
   }
   function killPlayer() {
     if (P.dead) return;
     P.dead = true; P.deadT = 0; P.vy = -8; P.vx = 0; P.hearts = 0; P.starT = 0;
     Sound.stop(); Sound.sfx.die();
-    L.bubbles = [];
+    L.bubbles = []; mamaPop('dead');
   }
   function updatePlayer() {
     if (P.dead) {
@@ -1624,7 +1730,7 @@
     if (P.fastT > 0) {
       P.fastT--;
       if (P.onGround && Math.abs(P.vx) > 3 && P.anim % 3 === 0) parts(P.x + P.w / 2 - Math.sign(P.vx) * 10, P.y + P.h - 2, 1, ['#c89a5a', '#f5dcb0', '#ffffff'], { sp: 0.4, up: 0.8, life: 16, g: 0 });
-      if (P.fastT === 120) popText(P.x + P.w / 2, P.y - 20, '¡SE ACABA EL CAFÉ!', '#c89a5a');
+      if (P.fastT === 120) popText(P.x + P.w / 2, P.y - 20, '¡SE ACABA EL ' + cafeName() + '!', '#c89a5a');
     }
     if (P.power === 'fire' && P.anim % 5 === 0) parts(P.x + rand(0, P.w), P.y + rand(0, 10), 1, ['#ff6a00', '#ffd23f'], { sp: 0.3, up: 1.2, life: 16, g: -0.05 });
     P.anim++; P.t = (P.t || 0) + 1; P.walk = ((P.walk || 0) + Math.abs(P.vx) * 0.085) % 8;
@@ -2347,7 +2453,7 @@
     let label = '', icon = null;
     if (P) {
       if (P.starT > 0) { label = 'TURRÓN ' + Math.ceil(P.starT / 60) + 's'; icon = 'turron'; }
-      else if (P.weapon === 'chancla') { label = 'CHANCLA x' + P.ammo; icon = 'chancla'; }
+      else if (P.weapon === 'chancla') { label = (canario() ? 'CHOLA x' : 'CHANCLA x') + P.ammo; icon = 'chancla'; }
       else if (P.weapon === 'churro') { label = 'CHURRO'; icon = 'churro'; }
       if (P.power === 'fire') label = (label ? label + ' + ' : '') + 'MOJO';
       else if (P.power === 'big') label = (label ? label + ' + ' : '') + 'BOCATA';
@@ -2407,6 +2513,7 @@
       txt('NIVEL ' + (G.levelIdx + 1) + '/' + LOCATIONS.length, W - 8, 34, { align: 'right', col: '#8a8aa8' });
     }
     if (L && L.pres && (G.state === 'play' || G.state === 'cutscene' || G.state === 'ending')) { const p = L.pres; p.t++; const out = p.dur - p.t; drawPresenter(p.idx, 10, H - 124, 96, { t: Math.min(p.t, out) }); if (p.t >= p.dur) L.pres = null; }
+    if (L && L.mama && (G.state === 'play' || G.state === 'pause')) drawMama(L.mama);
     if (L && L.banner && (G.state === 'play' || G.state === 'cutscene')) {
       const b = L.banner, a = Math.min(1, b.t / 8, (b.dur - b.t) / 20), lines = wrap(b.desc, 44), bw = 440, bh = 34 + lines.length * 12, x = W / 2 - bw / 2, y = 54;
       ctx.save(); ctx.globalAlpha = Math.max(0, a);
@@ -2423,7 +2530,7 @@
   function currentMusic() { if (L && ((L.boss && L.boss.state !== 'intro' && L.boss.state !== 'defeat') || L.miniFight === 'on')) return 'boss'; return L ? L.loc.music : 'title'; }
   function saveHi() { if (G.score > G.hi) { G.hi = G.score; try { localStorage.setItem('suelta-gato-hi', String(G.hi)); } catch (e) {} } }
   function startGame() {
-    D = DIFFICULTY[G.diff]; G.lives = 5; G.score = 0; G.pesetas = 0; G.levelIdx = 0;
+    D = DIFFICULTY[G.diff]; G.mamaSeen = false; G.lives = 5; G.score = 0; G.pesetas = 0; G.levelIdx = 0;
     startStory();
   }
   function startLevelIntro() { G.state = 'intro'; G.t = 0; loadLevel(G.levelIdx); Sound.stop(); Sound.sfx.confirm(); }
@@ -2431,7 +2538,7 @@
 
   function updatePlay() {
     if (Input.pressed('start') || Input.pressed('back')) { G.state = 'pause'; G.menu = 0; Sound.sfx.pause(); Sound.duck(true); return; }
-    L.time++;
+    L.time++; updateMama();
     const frozen = L.freezeT > 0;
     if (frozen && --L.freezeT === 0) { Sound.sfx.select(); popText(P.x + P.w / 2, P.y - 20, '¡SE DESCONGELAN!', '#9fe8f5'); }
     if (!P.dead && !L.cs && L.boss?.state !== 'defeat' && !frozen) {
@@ -2614,7 +2721,7 @@
     L.enemies.forEach(e => { if (e.dead) updateEnemy(e); });
   }
   function startClear() {
-    G.state = 'clear'; G.t = 0; L.pres = null;
+    G.state = 'clear'; G.t = 0; L.pres = null; L.mama = null;
     const secs = Math.floor(L.time / 60);
     L.bonus = { time: Math.floor(L.timeLeft / 60) * 20, hearts: P.hearts * 500, kills: L.kills, coins: L.coinsGot, secs };
     L.bonusPaid = 0; L.bonusTotal = L.bonus.time + L.bonus.hearts;
@@ -2883,8 +2990,19 @@
     const kinds = [...new Set(loc.enemies)];
     kinds.forEach((k, i) => { const x = W / 2 - kinds.length * 36 + i * 72 + 36; if (HD[k]) { const A = HD[k], an = ENEMY_TYPES[k].fly ? (A.fly || A.idle) : (A.walk || A.idle); const f = SPRITE_FRAMES['en_' + k][an[0]], sc = Math.min(1.3, 48 / (f[3] / RES)); drawHDFrame(k, an[Math.floor(G.t / 6) % an.length], x, 352, -1, { scale: sc }); } else { const img = Art.enemySprites[k].L[Math.floor(G.t / 15) % 2]; ctx.drawImage(img, Math.round(x - img.width / 2), 352 - img.height); } });
     if (final) txt('¡La guarida de ' + (L && L.nick || CAT) + ' te espera al final!', W / 2, 162, { align: 'center', col: '#ff8ab0' });
-    txt('Busca las letras  M-A-C-H-Í-N', W / 2 + 60, 186, { align: 'center', col: '#ffb060' });
+    txt('Busca las letras  M-A-C-H-Í-N', 300, 186, { align: 'center', col: '#ffb060' });
+    // especialidad de la casa (siempre sale en algún bloque ? del nivel)
+    const food = CITY_FOOD[G.levelIdx];
+    if (food) {
+      const bx = 466, by = 182, bw = 156, bh = 88, im = elem(food, Math.floor(G.t / 10) % 3) || Art.itemSprites[food];
+      glassBox(bx, by, bw, bh, true, { fill: 'rgba(42,31,69,0.7)' });
+      txt('ESPECIALIDAD', bx + bw / 2, by + 8, { align: 'center', col: '#8affff' });
+      const k = Math.min(64 / im.width, 40 / im.height);
+      ctx.drawImage(im, bx + bw / 2 - im.width * k / 2, by + 60 - im.height * k, im.width * k, im.height * k);
+      txt(food === 'cafe' ? cafeName() : FOOD_NAMES[food], bx + bw / 2, by + 70, { align: 'center', col: '#ffe066' });
+    }
   }
+  const FOOD_NAMES = { gazpacho: 'GAZPACHO', paella: 'PAELLA', cocido: 'COCIDO', cafe: 'BARRAQUITO' };
 
   // --- pausa
   function updatePause() {
@@ -3050,7 +3168,7 @@
   const img = new Image();
   const elementImg = new Image();
   const fontReady = (document.fonts && document.fonts.load) ? Promise.race([document.fonts.load('16px "Press Start 2P"', ' ¡¿ÁÉÍÓÚáéíóúÑñÜü'), new Promise(r => setTimeout(r, 2500))]) : Promise.resolve();
-  const imgReady = Promise.all([new Promise(r => { img.onload = r; img.onerror = r; }), new Promise(r => { elementImg.onload = r; elementImg.onerror = r; }), new Promise(r => { presImg.onload = r; presImg.onerror = r; presImg.src = PRESENTER_ATLAS; })]);
+  const imgReady = Promise.all([new Promise(r => { img.onload = r; img.onerror = r; }), new Promise(r => { elementImg.onload = r; elementImg.onerror = r; }), new Promise(r => { presImg.onload = r; presImg.onerror = r; presImg.src = PRESENTER_ATLAS; }), new Promise(r => { if (!window.MAMA_ATLAS) return r(); mamaImg.onload = r; mamaImg.onerror = r; mamaImg.src = window.MAMA_ATLAS; })]);
   img.src = SPRITE_ATLAS;
   elementImg.src = window.ELEMENT_ATLAS || '';
   requestAnimationFrame(frame);
@@ -3058,7 +3176,20 @@
     buildAtlas(img); buildElementSprites(elementImg); Art.buildEnemies(); Art.buildItems(); buildLetterSprites(); buildBotijoSprite(); if (elem('obj_botijo')) Art.itemSprites.botijo = elem('obj_botijo');
     for (const k of ['peseta', 'bocadillo', 'mojo', 'turron', 'tortilla', 'churro', 'chancla', 'corazon']) if (elem(k)) Art.itemSprites[k] = elem(k);
     G.state = 'title'; G.t = 0;
-    // depuración: ?test=N salta directamente al nivel N
+    // depuración: ?nivel=N (1..n) salta directamente al nivel N; opcionales &dificultad=facil|normal|dificil y &heroe=boy|girl
     window.__game = { G, get L() { return L; }, get P() { return P; }, Level, mk: (k, c, r) => makeEnemy(k, c, r), step(n = 1) { for (let i = 0; i < n; i++) update(); render(); return G.state; }, hold(a, v = true) { Input.virt[a] = v; }, tap(a) { Input.virt[a] = true; update(); Input.virt[a] = false; update(); render(); }, jump(i, diff = 'normal', hero = 'boy') { G.diff = diff; D = DIFFICULTY[diff]; G.hero = hero; G.levelIdx = i; startLevelIntro(); } };
+    const q = new URLSearchParams(location.search), nq = q.get('nivel') ?? q.get('test');
+    if (nq !== null) {
+      const n = Math.max(1, Math.min(LOCATIONS.length, parseInt(nq, 10) || 1));
+      const diff = DIFFICULTY[q.get('dificultad')] ? q.get('dificultad') : 'normal';
+      const hero = q.get('heroe') === 'girl' ? 'girl' : 'boy';
+      window.__game.jump(n - 1, diff, hero);
+    }
+    // ?jefe: empieza en el último nivel, justo a la puerta de la guarida de Machín
+    window.__game.toBoss = () => { if (!L || !L.isFinal) return; const x = (L.arenaStart - 3) * T; L.checkpointHit = true; P.x = x; P.y = groundYAt(Math.floor(x / T)) - P.h; L.camX = Math.max(0, x - VW / 2); };
+    if (q.has('jefe')) {
+      if (nq === null) window.__game.jump(LOCATIONS.length - 1, DIFFICULTY[q.get('dificultad')] ? q.get('dificultad') : 'normal', q.get('heroe') === 'girl' ? 'girl' : 'boy');
+      window.__game.toBoss();
+    }
   });
 })();

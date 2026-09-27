@@ -5,6 +5,7 @@
 const fs = require('fs'), path = require('path');
 require('./build-fondos.js'); // regenera js/fondos.js con las imágenes de fondos/
 require('./build-elements.js'); // recorta y empaqueta objetos, efectos, props y banderas
+require('./build-mama.js'); // recorta la hoja de Mamá (originales/mama.png) si existe
 const root = path.join(__dirname, '..');
 let body = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 body = body.replace(/<script src="([^"]+)"><\/script>/g, (m, src) =>

@@ -102,6 +102,10 @@ const MINI_BOSSES = [
     intro: '¡Soy el emperador de estas pistas! ¡Machín es mi vasallo!', lose: '¡Mi imperio de hielo se derrite!' },
 ];
 
+// Especialidad de cada ubicación: siempre sale en un bloque ? antes de la arena del mini-jefe
+// (en Cádiz, algo fresquito; en el Teide, algo que caliente)
+const CITY_FOOD = ['cafe', 'gazpacho', 'paella', 'cocido', 'paella', 'cafe', 'cocido', 'cafe'];
+
 const Level = (() => {
   function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -491,19 +495,23 @@ const Level = (() => {
       if (tiles[r][c2] === TOP) break;
       tiles[r][c2] = EMPTY; delete contents[c2 + ',' + r];
     }
+    // la especialidad de la casa, antes de la arena (fuera de ella, que se acaba de despejar)
+    L.food = CITY_FOOD[locIdx];
+    if (L.food) ensurePower(L, R, 16, miniCol !== null ? miniCol - 1 : goalStart - 2, [L.food], [L.food]);
     // no dejar enemigos en la zona final
     L.spawns = L.spawns.filter(s => s.col < goalStart - 2 && s.col > 14 && (miniCol === null || s.col < miniCol - 2 || s.col > miniCol + MINI_W + 1));
     return L;
   }
 
-  // Si el tramo [c0, c1) no tiene ningún power-up, convierte un bloque existente o coloca uno nuevo
+  // Si el tramo [c0, c1) no tiene ninguno de los objetos de `have`, convierte un bloque existente o coloca uno nuevo
   const POWERS = ['bocadillo', 'mojo', 'turron'];
-  function ensurePower(L, R, c0, c1, choices) {
+  function ensurePower(L, R, c0, c1, choices, have = POWERS) {
     const { tiles, contents } = L, pick = () => choices[Math.floor(R() * choices.length)];
     const inRange = k => { const c = +k.split(',')[0]; return c >= c0 && c < c1; };
-    if (Object.keys(contents).some(k => inRange(k) && POWERS.includes(contents[k]))) return;
-    // bloque ? existente del tramo
-    const qs = Object.keys(contents).filter(inRange);
+    if (Object.keys(contents).some(k => inRange(k) && have.includes(contents[k]))) return;
+    // bloque ? existente del tramo; mejor uno de pesetas, para no quitar los power-ups garantizados
+    const all = Object.keys(contents).filter(inRange), cheap = all.filter(k => contents[k] === 'peseta' || contents[k] === 'multi');
+    const qs = cheap.length ? cheap : all.filter(k => !POWERS.includes(contents[k]));
     if (qs.length) { contents[qs[Math.floor(R() * qs.length)]] = pick(); return; }
     // ladrillo existente -> bloque ?
     const bricks = [];
