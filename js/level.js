@@ -3,8 +3,17 @@
 // ============================================================
 const ROWS = 15, TILE = 24;
 // tiles del mapa
-const EMPTY = 0, TOP = 1, FILL = 2, BRICK = 3, QBLOCK = 4, USED = 5, PLAT = 6, BLOCK = 7;
-const isSolidTile = t => t === TOP || t === FILL || t === BRICK || t === QBLOCK || t === USED || t === BLOCK;
+const EMPTY = 0, TOP = 1, FILL = 2, BRICK = 3, QBLOCK = 4, USED = 5, PLAT = 6, BLOCK = 7, PIPE = 8, HIDDEN = 9, BOTIJO = 10;
+const isSolidTile = t => t === TOP || t === FILL || t === BRICK || t === QBLOCK || t === USED || t === BLOCK || t === PIPE || t === BOTIJO;
+// Sala secreta (se entra por una tubería): columnas que se añaden tras la pared final
+const ROOM_W = 22;
+// Letras que hay que juntar en cada nivel
+const LETTERS = ['M', 'A', 'C', 'H', 'Í', 'N'];
+// Tramos propios de cada ubicación (se reparten a lo largo del nivel)
+const LOCAL_TRAMOS = {
+  laspalmas: ['marea'], cadiz: ['viento'], sotogrande: ['golf'], madrid: ['metro'], warner: ['montana'],
+  siam: ['tobogan', 'flotadores'], teide: ['erupcion', 'geiser'], andorra: ['telesilla', 'aludes'],
+};
 
 const DIFFICULTY = {
   facil:   { key: 'facil', name: 'FÁCIL', tag: 'Paseo por la playa', hearts: 4, len: 240, maxGap: 3, enemyRate: 0.45, pitRate: 0.16, speed: 0.8, bossHP: 16, powerRate: 0.55, desc: ['4 corazones', 'Huecos pequeños', 'Bichos tranquilos'] },
@@ -118,6 +127,203 @@ const Level = (() => {
       const list = ['bocadillo', 'bocadillo', 'mojo', 'churro', 'chancla', 'chancla', 'turron', 'tortilla', 'tortilla', 'gazpacho', 'gazpacho', 'paella', 'paella', 'cocido', 'cocido', 'cafe', 'cafe'];
       return list[Math.floor(R() * list.length)];
     };
+    // Atracciones (plataformas que se mueven, muelles, zonas con efectos...) y tramos
+    // "virtuales" para el validador: por donde pasa una plataforma se puede ir de pie.
+    const objs = [], vsegs = [], hot = [];
+    const vseg = (r, c0, c1) => vsegs.push({ r, c0, c1, plat: true });
+    let pipe = null, botijos = 0, hiddens = 0;
+    const TR = {
+      // foso con plataformas que se caen al pisarlas
+      cae() {
+        const pitW = ri(7, 9), start = c;
+        let pos = 0, lastRow = h;
+        while (pitW - pos > 2) {
+          const g = ri(1, 2); let w = 2;
+          if (pos + g + w > pitW - 1) w = pitW - 1 - pos - g;
+          if (w <= 0) break;
+          const pc = start + pos + g, pr = Math.max(6, Math.min(h - 1, lastRow + ri(-1, 1)));
+          objs.push({ kind: 'cae', c: pc, r: pr, w }); vseg(pr, pc, pc + w - 1);
+          for (let i = 0; i < w; i++) coin(pc + i, pr - 2);
+          hot.push({ col: pc, row: pr - 3 });
+          lastRow = pr; pos += g + w;
+        }
+        c += pitW; flat(ri(2, 4));
+      },
+      // foso ancho con una plataforma que va y viene
+      mov() {
+        const pitW = ri(9, 12), start = c, pr = h - ri(0, 1), w = 3, span = pitW - w - 2;
+        objs.push({ kind: 'mov', c: start + 1, r: pr, w, dx: span, dy: 0, period: 150 + span * 16 });
+        vseg(pr, start + 1, start + pitW - 2);
+        for (let i = 2; i < pitW - 2; i += 2) coin(start + i, pr - 3);
+        hot.push({ col: start + (pitW >> 1), row: pr - 4 });
+        if (R() < D.enemyRate * 0.4) spawnAir(start + (pitW >> 1), pr - 5);
+        c += pitW; flat(ri(3, 5));
+      },
+      // ascensor: una plataforma sube y baja junto a un muro demasiado alto para saltarlo
+      ascensor() {
+        if (h < 12) { h = ri(12, 13); flat(2); }
+        const start = c, low = h, top = h - 5;
+        objs.push({ kind: 'mov', c: start, r: low, w: 2, dx: 0, dy: top - low, period: 260 });
+        for (let r = top; r <= low; r++) vseg(r, start, start + 1);
+        for (let r = top; r < low - 2; r++) coin(start + (r % 2), r - 1);
+        c += 2; h = top; flat(ri(4, 6));
+        hot.push({ col: start + 4, row: top - 3 });
+      },
+      // muelle que te lanza hasta una plataforma muy alta con premio
+      muelle() {
+        const n = ri(7, 9), s = c; flat(n);
+        objs.push({ kind: 'muelle', c: s + 2, r: h });
+        const pr = Math.max(3, h - 8);
+        for (let i = 0; i < 4; i++) { tiles[pr][s + 3 + i] = PLAT; coin(s + 3 + i, pr - 1); }
+        hot.push({ col: s + 5, row: pr - 2 });
+      },
+      // tubería (o alcantarilla) que lleva a la sala secreta: una por nivel
+      tuberia() {
+        const n = ri(7, 9), s = c; flat(n);
+        if (pipe) return;
+        const pc = s + 3;
+        tiles[h - 1][pc] = tiles[h - 1][pc + 1] = tiles[h - 2][pc] = tiles[h - 2][pc + 1] = PIPE;
+        pipe = { c: pc, r: h - 2 };
+        coin(pc, h - 4); coin(pc + 1, h - 4);
+      },
+      // Las Palmas: la marea sube y baja e inunda la hondonada
+      marea() {
+        if (h > 11) h = 11;
+        flat(2);
+        const n = ri(8, 11), low = h + 2, s = c;
+        for (let i = 0; i < n; i++) setCol(c++, low);
+        flat(2);
+        objs.push({ kind: 'marea', c: s, w: n, r: low });
+        for (let i = 1; i < n - 1; i += 2) coin(s + i, low - 2);
+        hot.push({ col: s + (n >> 1), row: low - 2 });
+        if (R() < D.enemyRate) spawnGround(s + ri(2, n - 3), low);
+      },
+      // Cádiz: ráfagas de levante que te empujan hacia atrás
+      viento() {
+        const s = c; flat(3);
+        const gaps = ri(2, 3);
+        for (let k = 0; k < gaps; k++) {
+          for (let i = 0; i < 2; i++) { coin(c, h - 3); c++; }
+          flat(ri(3, 5));
+          if (R() < D.enemyRate * 0.5) spawnGround(c - 2, h);
+        }
+        objs.push({ kind: 'viento', c: s, w: c - s });
+        hot.push({ col: s + 4, row: h - 5 });
+        if (R() < D.enemyRate * 0.5) spawnAir(s + ((c - s) >> 1), h - 5);
+      },
+      // Sotogrande: búnker de arena (se corre y se salta menos) y un hoyo de golf con premio
+      golf() {
+        if (h > 12) h = 12;
+        const s = c; flat(6);
+        objs.push({ kind: 'bunker', c: s + 1, w: 4 });
+        if (R() < D.enemyRate) spawns.push({ kind: 'topo', col: s + 3, row: h });
+        flat(3);
+        const hc = c; setCol(c++, h + 1); setCol(c++, h + 1);
+        objs.push({ kind: 'hoyo', c: hc, r: h + 1 });
+        flat(4);
+        hot.push({ col: hc + 3, row: h - 4 });
+      },
+      // Madrid: vagones de metro que pasan por el foso y hacen de plataforma
+      metro() {
+        if (h > 12) h = 12;
+        flat(1);
+        const pitW = ri(10, 13), s = c;
+        objs.push({ kind: 'metro', c: s, w: pitW, r: h + 1, n: 2, ww: 4, speed: 1.1 + R() * 0.4 });
+        vseg(h + 1, s, s + pitW - 1);
+        for (let i = 2; i < pitW - 1; i += 3) coin(s + i, h - 2);
+        hot.push({ col: s + (pitW >> 1), row: h - 3 });
+        c += pitW; flat(ri(3, 4));
+      },
+      // Parque Warner: vagoneta de montaña rusa que acelera y se estrella al final
+      montana() {
+        flat(1);
+        const pitW = ri(12, 15), s = c;
+        objs.push({ kind: 'vagoneta', c: s, w: pitW, r: h });
+        vseg(h, s, s + pitW - 1);
+        for (let i = 3; i < pitW - 1; i++) coin(s + i, h - 3 - Math.round(Math.sin((i - 3) / (pitW - 4) * Math.PI) * 2));
+        hot.push({ col: s + (pitW >> 1), row: h - 6 });
+        c += pitW;
+        setCol(c, h); tiles[h - 1][c] = BLOCK; tiles[h - 2][c] = BLOCK; c++;
+        flat(ri(6, 8)); // sitio para aterrizar si sales despedido
+      },
+      // Siam Park: tobogán cuesta abajo (te deslizas sin poder frenar)
+      tobogan() {
+        const hs = Math.max(6, Math.min(h, 8));
+        while (h > hs) { h--; setCol(c++, h); setCol(c++, h); }
+        flat(2);
+        const s = c, drop = Math.min(5, 13 - h), h0 = h;
+        for (let k = 1; k <= drop; k++) { h = h0 + k; setCol(c++, h); setCol(c++, h); coin(c - 1, h - 2); }
+        objs.push({ kind: 'tobogan', c: s, w: c - s, r0: h0, r1: h });
+        hot.push({ col: s + drop, row: h0 + (drop >> 1) - 3 });
+        if (R() < D.enemyRate) spawnAir(s + drop, h0 - 2);
+        flat(ri(4, 6));
+      },
+      // Siam Park: piscina con flotadores que se hunden si te quedas encima
+      flotadores() {
+        if (h > 12) h = 12;
+        flat(1);
+        const n = ri(2, 3), pitW = n * 3 + 1, s = c;
+        for (let k = 0; k < n; k++) {
+          const fc = s + 1 + k * 3;
+          objs.push({ kind: 'flotador', c: fc, r: h, w: 2 }); vseg(h, fc, fc + 1);
+          coin(fc, h - 2); coin(fc + 1, h - 2);
+        }
+        objs.push({ kind: 'piscina', c: s, w: pitW, r: h });
+        hot.push({ col: s + (pitW >> 1), row: h - 4 });
+        c += pitW; flat(ri(3, 4));
+      },
+      // El Teide: lluvia de rocas de lava (su sombra avisa de dónde caen)
+      erupcion() {
+        const s = c; flat(4);
+        for (let k = 0; k < 2; k++) {
+          if (R() < 0.5) h = Math.max(8, Math.min(13, h + (R() < 0.5 ? -1 : 1)));
+          flat(ri(4, 6));
+          if (R() < 0.5) { for (let i = 0; i < 2; i++) { coin(c, h - 3); c++; } flat(2); }
+        }
+        flat(2);
+        objs.push({ kind: 'erupcion', c: s, w: c - s });
+        hot.push({ col: s + 6, row: h - 5 });
+      },
+      // El Teide: géiser que te lanza muy alto
+      geiser() {
+        const n = ri(7, 9), s = c; flat(n);
+        const gc = s + 3;
+        objs.push({ kind: 'geiser', c: gc, r: h });
+        const pr = Math.max(3, h - 8);
+        for (let i = 0; i < 3; i++) { tiles[pr][gc - 1 + i] = PLAT; coin(gc - 1 + i, pr - 1); }
+        hot.push({ col: gc, row: pr - 2 });
+      },
+      // Andorra: telesilla que sube en diagonal hasta una ladera más alta
+      telesilla() {
+        if (h < 12) h = ri(12, 13);
+        flat(2);
+        const pitW = ri(9, 11), s = c, top = h - ri(4, 5);
+        objs.push({ kind: 'telesilla', c: s, w: pitW, r0: h, r1: top, n: 3 });
+        const xs = (s - 2) * TILE, xe = (s + pitW) * TILE, ys = h * TILE, ye = top * TILE, cw = 2 * TILE;
+        for (let f = 0; f <= 1.0001; f += 0.02) {
+          const x = xs + (xe - xs) * f, y = ys + (ye - ys) * f;
+          const c0 = Math.max(s, Math.floor(x / TILE)), c1 = Math.min(s + pitW - 1, Math.floor((x + cw - 1) / TILE));
+          if (c1 >= c0) vseg(Math.floor(y / TILE), c0, c1);
+        }
+        for (let i = 1; i < pitW - 1; i += 2) coin(s + i, Math.round(h - (h - top) * (i + 2) / (pitW + 2)) - 3);
+        hot.push({ col: s + (pitW >> 1), row: Math.round((h + top) / 2) - 4 });
+        c += pitW; h = top; flat(ri(4, 6));
+      },
+      // Andorra: bolas de nieve que bajan rodando y van creciendo
+      aludes() {
+        const s = c; flat(ri(14, 18));
+        objs.push({ kind: 'aludes', c: s, w: c - s });
+        for (let i = s + 3; i < c - 2; i += 3) coin(i, h - 4);
+        hot.push({ col: s + 8, row: h - 5 });
+      },
+    };
+    // Reparto fijo: atracciones de la ubicación y comunes a todos los niveles
+    const local = LOCAL_TRAMOS[loc.painter] || [];
+    const sched = [];
+    [0.12, 0.3, 0.58, 0.86].forEach((f, i) => { if (local.length) sched.push({ at: Math.floor(bodyLen * f), k: local[i % local.length] }); });
+    [[0.2, 'cae'], [0.34 + R() * 0.1, 'tuberia'], [0.46, 'mov'], [0.64, 'muelle'], [0.93, R() < 0.5 ? 'ascensor' : 'cae']]
+      .forEach(([f, k]) => sched.push({ at: Math.floor(bodyLen * f), k }));
+    sched.sort((a, b) => a.at - b.at);
     flat(12);
     let checkpointX = null, miniCol = null;
     const checkAt = Math.floor(bodyLen / 2), miniAt = Math.floor(bodyLen * 0.75);
@@ -125,17 +331,30 @@ const Level = (() => {
       if (checkpointX === null && c >= checkAt) { const s = c; flat(7); checkpointX = (s + 3) * TILE; continue; }
       // arena del mini-jefe: suelo llano y despejado entre dos rejas
       if (miniCol === null && c >= miniAt) { miniCol = c; flat(MINI_W); continue; }
+      if (sched.length && c >= sched[0].at) { TR[sched.shift().k](); continue; }
       const roll = R();
       let acc = 0;
       const pick = w => (acc += w) > roll;
-      if (pick(0.3)) {
+      if (c > 20 && pick(0.035)) TR.cae();
+      else if (c > 20 && pick(0.03)) TR.mov();
+      else if (c > 20 && pick(0.025)) TR.muelle();
+      else if (c > 20 && local.length && pick(0.04)) TR[local[Math.floor(R() * local.length)]]();
+      else if (pick(0.3)) {
         // tramo llano con bloques, monedas y enemigos
         const n = ri(5, 10), s = c; flat(n);
         if (n >= 6 && h - 4 >= 3 && R() < 0.6) {
           const bn = ri(1, Math.min(4, n - 4)), bs = s + ri(1, n - bn - 2);
-          for (let i = 0; i < bn; i++) { const q = R() < 0.5 || bn === 1; tiles[h - 4][bs + i] = q ? QBLOCK : BRICK; if (q) contents[(bs + i) + ',' + (h - 4)] = content(); }
+          for (let i = 0; i < bn; i++) {
+            // el botijo mágico: uno por nivel, entre los bloques
+            if (!botijos && bn >= 2 && i === 0 && c > 30 && R() < 0.35) { tiles[h - 4][bs] = BOTIJO; botijos++; continue; }
+            const q = R() < 0.5 || bn === 1; tiles[h - 4][bs + i] = q ? QBLOCK : BRICK; if (q) contents[(bs + i) + ',' + (h - 4)] = content();
+          }
           if (R() < 0.5) for (let i = 0; i < bn; i++) coin(bs + i, h - 5);
-        } else if (R() < 0.5) for (let i = s + 1; i < s + n - 1; i++) coin(i, h - 2);
+        } else {
+          if (R() < 0.5) for (let i = s + 1; i < s + n - 1; i++) coin(i, h - 2);
+          // bloque invisible con una vida extra (como mucho dos por nivel)
+          if (hiddens < 2 && c > 30 && n >= 5 && h - 4 >= 3 && R() < 0.14) { tiles[h - 4][s + ri(1, n - 2)] = HIDDEN; hiddens++; }
+        }
         if (c > 16 && R() < D.enemyRate) spawnGround(s + ri(2, n - 1), h);
         if (c > 16 && R() < D.enemyRate * 0.35) spawnAir(s + ri(1, n - 1), h - 5);
       } else if (pick(D.pitRate)) {
@@ -194,7 +413,65 @@ const Level = (() => {
     while (c < cols) setCol(c++, h);
     // pared final
     for (let r = 0; r < ROWS; r++) tiles[r][cols - 1] = BLOCK;
-    const L = { locIdx, cols, tiles, contents, coins, spawns, checkpointX, goalStart, isFinal, seed, miniCol };
+    const mainCols = cols;
+    // Sala secreta: una cueva cerrada detrás de la pared final, llena de pesetas.
+    // Se baja por la tubería del nivel y se vuelve por la tubería del fondo de la sala.
+    let room = null;
+    if (pipe) {
+      const r0 = cols; cols += ROOM_W;
+      tiles = tiles.map(row => { const n = new Uint8Array(cols); n.set(row); return n; });
+      for (let r = 0; r < ROWS; r++) { tiles[r][r0] = BLOCK; tiles[r][cols - 1] = BLOCK; }
+      for (let cc = r0 + 1; cc < cols - 1; cc++) { for (let r = 0; r < 3; r++) tiles[r][cc] = BLOCK; setCol(cc, 12); }
+      tiles[3][r0 + 2] = tiles[3][r0 + 3] = PIPE; // entrada: cuelga del techo
+      const ex = cols - 5;
+      tiles[10][ex] = tiles[10][ex + 1] = tiles[11][ex] = tiles[11][ex + 1] = PIPE;
+      for (let cc = r0 + 5; cc < ex - 1; cc++) { coin(cc, 11); coin(cc, 10); if (cc % 2) coin(cc, 5); }
+      for (const cc of [r0 + 7, r0 + 11, r0 + 15]) { tiles[8][cc] = QBLOCK; contents[cc + ',8'] = 'multi'; }
+      room = { c0: r0, c1: cols - 1, entry: r0 + 2, exit: ex };
+    }
+    // si no ha salido ningún botijo, un ladrillo se convierte en botijo
+    if (!botijos) {
+      const cand = [];
+      for (let cc = 30; cc < goalStart - 2; cc++) for (let r = 3; r < ROWS; r++) if (tiles[r][cc] === BRICK && (miniCol === null || cc < miniCol || cc >= miniCol + MINI_W)) cand.push([cc, r]);
+      if (cand.length) { const [cc, r] = cand[Math.floor(R() * cand.length)]; tiles[r][cc] = BOTIJO; botijos++; }
+      else {
+        // o se coloca sobre un suelo llano con sitio libre por encima
+        const spots = [];
+        for (let cc = 31; cc < goalStart - 3; cc++) {
+          if (miniCol !== null && cc >= miniCol - 1 && cc <= miniCol + MINI_W) continue;
+          let g = -1; for (let r = 4; r < ROWS; r++) if (tiles[r][cc] === TOP) { g = r; break; }
+          if (g < 7 || tiles[g][cc - 1] !== TOP || tiles[g][cc + 1] !== TOP) continue;
+          let clear = true;
+          for (let dc = -1; dc <= 1 && clear; dc++) for (let r = g - 6; r < g; r++) if (tiles[r][cc + dc] !== EMPTY) { clear = false; break; }
+          if (clear) spots.push([cc, g - 4]);
+        }
+        if (spots.length) { const [cc, r] = spots[Math.floor(R() * spots.length)]; tiles[r][cc] = BOTIJO; botijos++; }
+      }
+    }
+    // Letras M-A-C-H-Í-N: una en cada sexto del nivel, en sitios arriesgados (y a veces una en la sala secreta)
+    const letters = [], lo = 16, span = (goalStart - 4 - lo) / LETTERS.length;
+    const okSpot = p => p.row >= 1 && p.row < ROWS && !isSolidTile(tiles[p.row][p.col]) && tiles[p.row][p.col] !== HIDDEN && (miniCol === null || p.col < miniCol - 1 || p.col > miniCol + MINI_W);
+    const roomLetter = room ? ri(0, LETTERS.length - 1) : -1;
+    for (let i = 0; i < LETTERS.length; i++) {
+      if (i === roomLetter) { letters.push({ i, col: room.c0 + 11, row: 6 }); continue; }
+      const a = lo + span * i, b = a + span, inB = p => p.col >= a && p.col < b && okSpot(p);
+      let pool = hot.filter(inB), fromCoins = false;
+      if (!pool.length) { pool = coins.filter(inB); fromCoins = true; }
+      if (pool.length) {
+        const p = pool[Math.floor(R() * pool.length)];
+        letters.push({ i, col: p.col, row: p.row });
+        const k = coins.findIndex(q => q.col === p.col && q.row === p.row); if (k >= 0) coins.splice(k, 1);
+        continue;
+      }
+      // sin sitios buenos: flotando un poco por encima del suelo
+      const mid = Math.floor((a + b) / 2);
+      for (let d = 0; d < b - a; d++) {
+        const cc = mid + (d % 2 ? -(d + 1) / 2 : d / 2);
+        let g = -1; for (let r = 3; r < ROWS; r++) if (tiles[r][cc] === TOP) { g = r; break; }
+        if (g > 3 && okSpot({ col: cc, row: g - 3 }) && okSpot({ col: cc, row: g - 1 })) { letters.push({ i, col: cc, row: g - 3 }); break; }
+      }
+    }
+    const L = { locIdx, cols, mainCols, tiles, contents, coins, spawns, checkpointX, goalStart, isFinal, seed, miniCol, objs, vsegs, pipe, room, letters };
     if (isFinal) {
       L.arenaStart = goalStart + 12;
       const A = L.arenaStart;
@@ -257,6 +534,8 @@ const Level = (() => {
         if (ok) { if (cur && cur.c1 === c - 1) cur.c1 = c; else { cur = { r, c0: c, c1: c, plat: t === PLAT }; segs.push(cur); } }
       }
     }
+    // recorridos de las plataformas móviles, vagones, telesillas...
+    for (const v of L.vsegs || []) segs.push(Object.assign({}, v));
     const reach = (A, B) => {
       const dy = A.r - B.r; // >0: B está más alto
       if (dy > 4) return false;
