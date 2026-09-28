@@ -3073,6 +3073,11 @@
   function startClear() {
     G.state = 'clear'; G.t = 0; L.pres = null; L.mama = null;
     const secs = Math.floor(L.time / 60);
+    if (L.forfeit) {
+      L.bonus = { time: 0, hearts: 0, kills: L.kills, coins: L.coinsGot, secs, race: 0 };
+      L.bonusPaid = 0; L.bonusTotal = 0; L.medals = [0, 0, 0];
+      Sound.sfx.hurt(); return;
+    }
     L.bonus = { time: Math.floor(L.timeLeft / 60) * 20, hearts: P.hearts * 500, kills: L.kills, coins: L.coinsGot, secs, race: R && raceWinner(G.levelIdx) === 'me' ? RACE_BONUS : 0 };
     L.bonusPaid = 0; L.bonusTotal = L.bonus.time + L.bonus.hearts + L.bonus.race;
     awardMedals();
@@ -3082,7 +3087,9 @@
     G.t++;
     if (G.t > 90 && L.bonusPaid < L.bonusTotal) { const step = Math.min(L.bonusTotal - L.bonusPaid, 100); L.bonusPaid += step; G.score += step; if (G.t % 3 === 0) Sound.sfx.tally(); }
     L.medals.forEach((m, i) => { if (m && G.t === MEDAL_T0 + i * 22) { if (m === 2) Sound.sfx.checkpoint(); else Sound.sfx.coin(); } });
-    if ((G.t > 150 && Input.confirm()) || G.t > 900) { G.score += L.bonusTotal - L.bonusPaid; L.bonusPaid = L.bonusTotal; saveHi(); startShop(); }
+    if ((G.t > 150 && Input.confirm()) || G.t > 900) { G.score += L.bonusTotal - L.bonusPaid; L.bonusPaid = L.bonusTotal; saveHi();
+      // sin llegar al final no hay más niveles: se vuelve al título
+      if (L.forfeit && L.isFinal) { G.state = 'title'; G.t = 0; Sound.play('title'); } else startShop(); }
   }
 
   // --- final
@@ -3352,18 +3359,23 @@
   // Los dos juegan el mismo nivel (misma semilla) a la vez, cada uno en su dispositivo, y ven
   // al otro como un fantasma. Antes de cada nivel se esperan; gana el nivel quien llega antes a la meta.
   let R = null; // null = partida de un jugador
-  const RACE_BONUS = 2000;
+  const RACE_BONUS = 2000, CATCH_S = 30;
   const RIVAL_TXT = { play: 'va por el {P}%', cutscene: '¡ha llegado a la meta!', clear: '¡ha llegado a la meta!', shop: 'está en el chiringuito',
     intro: 'está a punto de empezar', respawn: 'se ha caído...', gameover: 'se ha quedado sin vidas', pause: 'está en pausa', story: 'está viendo la historia',
     ending: '¡ha llegado al final!', select: 'está eligiendo personaje', difficulty: 'está eligiendo dificultad', lobby: 'te está esperando' };
   function raceNew() { R = { seed: 0, rival: null, rivalHero: 'girl', ready: -1, rivalReady: -1, count: 0, goals: {}, pendingStart: null, sendT: 0 }; }
   function raceQuit() { Net.close(); R = null; }
   const rivalName = () => R ? NAMES[R.rivalHero] : '';
-  const rivalTxt = r => Net.status === 'reconnecting' ? 'se ha cortado la conexión, reconectando...' : !Net.on ? 'se ha desconectado'  : !r ? 'se está conectando' : (RIVAL_TXT[r.st] || '').replace('{P}', Math.round((r.pr || 0) * 100));
+  const rivalTxt = r => r && r.st === 'clear' && R.goals[r.lv] && R.goals[r.lv].rival && R.goals[r.lv].rival.forfeit ? 'no ha llegado a la meta'
+    : r && r.ct > 0 && r.st !== 'clear' ? 'va por el ' + Math.round((r.pr || 0) * 100) + '% (le quedan ' + r.ct + ' s)' : Net.status === 'reconnecting' ? 'se ha cortado la conexión, reconectando...' : !Net.on ? 'se ha desconectado'  : !r ? 'se está conectando' : (RIVAL_TXT[r.st] || '').replace('{P}', Math.round((r.pr || 0) * 100));
   function raceStart(m) { R.startMsg = m; G.diff = m.diff; R.seed = m.seed >>> 0; R.pendingStart = null; R.goals = {}; R.ready = R.rivalReady = -1; Sound.sfx.confirm(); startGame(); }
   // gana el nivel quien llegó primero; si los dos avisos se cruzan por el camino, decide el tiempo de juego
   function raceWinner(lv) {
     const g = R && R.goals[lv]; if (!g) return null;
+    const mf = g.me && g.me.forfeit, rf = g.rival && g.rival.forfeit;
+    if (mf && rf) return null;
+    if (mf) return 'rival';
+    if (rf) return g.me ? 'me' : null;
     if (g.me && g.rival) {
       if (g.me.first !== g.rival.first) return g.me.first ? 'me' : 'rival';
       return g.me.time !== g.rival.time ? (g.me.time < g.rival.time ? 'me' : 'rival') : (Net.isHost ? 'me' : 'rival');
@@ -3374,10 +3386,12 @@
   function raceGoal(who, m) {
     const lv = who === 'me' ? G.levelIdx : m.lv, g = R.goals[lv] = R.goals[lv] || {};
     if (g[who]) return;
-    if (who === 'me') { g.me = { time: L.time, first: !g.rival }; Net.send({ t: 'goal', lv, time: L.time, first: g.me.first }); }
+    if (who === 'me') { R.catchT = 0; g.me = { time: L.time, first: !g.rival }; Net.send({ t: 'goal', lv, time: L.time, first: g.me.first }); }
     else {
-      g.rival = { time: m.time, first: m.first };
-      if (lv === G.levelIdx && G.state === 'play' && L) { popText(P.x + P.w / 2, P.y - 40, '¡' + rivalName() + ' HA LLEGADO A LA META!', '#ff8ab0'); Sound.sfx.hurt(); }
+      g.rival = { time: m.time, first: m.first, forfeit: !!m.forfeit };
+      if (lv === G.levelIdx && L && P && ['play', 'pause', 'respawn'].includes(G.state)) {
+        if (!m.forfeit) Sound.sfx.hurt(); // los avisos los da raceTick
+      }
     }
   }
   Net.onMsg = m => {
@@ -3416,8 +3430,24 @@
     if (!R) return;
     const r = R.rival;
     if (r && r.x != null) { r.dx += (r.x - r.dx) * 0.3; r.dy += (r.y - r.dy) * 0.3; }
+    // si el rival ya ha llegado a la meta, quedan unos segundos para llegar tú (la pausa no para el reloj)
+    const g = R.goals[G.levelIdx], racing = L && P && ['play', 'pause', 'respawn'].includes(G.state);
+    if (racing && g && g.rival && !g.rival.forfeit && !g.me && R.catchLv !== G.levelIdx) {
+      R.catchLv = G.levelIdx; R.catchT = CATCH_S * 60;
+      showBanner('bandera', '¡' + rivalName() + ' HA LLEGADO A LA META!', 'Te quedan ' + CATCH_S + ' segundos para llegar. Si no, el nivel se acaba para ti (sin perder vidas).');
+    }
+    if (racing && g && g.rival && g.rival.forfeit && R.ffLv !== G.levelIdx) {
+      R.ffLv = G.levelIdx; Sound.sfx.coin();
+      showBanner('bandera', '¡' + rivalName() + ' SE HA RENDIDO!', 'Termina el nivel tranquil' + (G.hero === 'boy' ? 'o' : 'a') + ': si llegas a la meta, ganas la carrera de este nivel.');
+    }
+    if (R.catchT > 0 && racing) {
+      R.catchT--;
+      if (R.catchT <= 600 && R.catchT % 60 === 0 && R.catchT > 0) Sound.sfx.select();
+      if (R.catchT === 0) raceForfeit('time');
+    }
+    if (R.spec) specUpdate();
     if (!Net.on || ++R.sendT % 3) return;
-    const m = { t: 's', st: G.state, lv: G.levelIdx, sc: G.score };
+    const m = { t: 's', st: G.state, lv: G.levelIdx, sc: G.score, ct: R.catchT > 0 ? Math.ceil(R.catchT / 60) : 0 };
     if (L && P && ['play', 'cutscene', 'respawn', 'pause', 'ending'].includes(G.state)) {
       const goal = (L.isFinal ? L.arenaStart : L.goalCol) * T;
       Object.assign(m, { x: Math.round(P.x + P.w / 2), y: Math.round(P.y + P.h), fa: P.face, f: P.lastF ?? IDLE[0], s: pScale(),
@@ -3425,12 +3455,12 @@
     }
     Net.send(m);
   }
-  const rivalHere = () => { const r = R && R.rival; return r && Net.on && r.lv === G.levelIdx && r.dx != null && !r.rm && ['play', 'cutscene', 'respawn', 'pause', 'ending'].includes(r.st); };
+  const rivalHere = () => { const r = R && R.rival; return r && Net.on && r.lv === (R.spec ? R.spec.lv : G.levelIdx) && r.dx != null && !r.rm && ['play', 'cutscene', 'respawn', 'pause', 'ending'].includes(r.st); };
   // el rival, medio transparente, en el mundo (se llama con la cámara ya puesta)
   function drawRival() {
     if (!rivalHere()) return;
     const r = R.rival;
-    ctx.save(); ctx.globalAlpha = 0.55;
+    ctx.save(); ctx.globalAlpha = R.spec ? 1 : 0.55;
     drawChar(R.rivalHero, r.f, r.dx, r.dy, r.fa, r.s || 1, r.v === 'r' ? Math.floor(G.t / 3) : r.v);
     ctx.restore();
   }
@@ -3444,8 +3474,54 @@
     txt(name, right ? W - 18 : 18, y - 10, { align: right ? 'right' : 'left', col: '#ff8ab0' });
     txt(m + ' m', right ? W - 18 : 18, y + 2, { align: right ? 'right' : 'left', col: '#ffffff' });
   }
+  // el nivel se acaba sin llegar a la meta: por tiempo o porque te rindes. Sin perder vidas, y a por el siguiente.
+  function raceForfeit(why) {
+    const lv = G.levelIdx, g = R.goals[lv] = R.goals[lv] || {};
+    if (!g.me) { g.me = { forfeit: true, first: false, time: 1e9 }; Net.send({ t: 'goal', lv, forfeit: 1, first: false, time: 1e9 }); }
+    R.catchT = 0; Sound.duck(false); Sound.stop();
+    L.forfeit = why; startClear();
+  }
+
+  // --- modo espectador: mientras esperas al rival en la pantalla del nivel, ves cómo juega el suyo
+  // (se genera su nivel con la misma semilla; los bichos no se ven porque cada uno tiene los suyos)
+  function specEnter(lv) {
+    const keep = { L, P, perks: G.perks, slow: G.slow };
+    G.perks = {}; loadLevel(lv);
+    G.perks = keep.perks; G.slow = keep.slow;
+    L.enemies = []; L.mini = null; L.cameoAt = [];
+    P.hidden = true;
+    R.spec = { lv, L, P };
+    L = keep.L; P = keep.P;
+  }
+  function specExit() { R.spec = null; }
+  function specUpdate() {
+    const sp = R.spec, r = R.rival;
+    if (!sp || !r || r.dx == null) return;
+    const kL = L, kP = P; L = sp.L; P = sp.P;
+    P.x = r.dx - P.w / 2; P.y = r.dy - P.h; P.face = r.fa || 1; P.onGround = true; P.dead = false;
+    L.boss = null; L.arenaLocked = false; L.miniFight = null;
+    updateCamera();
+    L = kL; P = kP;
+  }
+  function drawSpectate() {
+    const sp = R.spec, kL = L, kP = P; L = sp.L; P = sp.P;
+    drawWorld();
+    L = kL; P = kP;
+    const r = R.rival;
+    ctx.fillStyle = 'rgba(10,6,24,0.88)'; ctx.fillRect(0, 0, W, 48);
+    txt('VIENDO A ' + rivalName() + ' EN ' + LOCATIONS[sp.lv].short.toUpperCase(), W / 2, 4, { size: 16, align: 'center', col: '#ffe066' });
+    txt(rivalName() + ' ' + rivalTxt(r), W / 2, 24, { align: 'center', col: '#ff8ab0' });
+    txt('Empezaréis juntos en ' + LOCATIONS[G.levelIdx].short + (TCH() ? '   (PATADA: jugar sin esperar)' : '   (C/B: jugar sin esperar)'), W / 2, 36, { align: 'center', col: '#c8c8e0' });
+    if (r && r.ct > 0) txt(String(r.ct), W / 2, 60, { size: 32, align: 'center', col: r.ct <= 10 ? '#ff4a4a' : '#ffffff' });
+  }
+
   // barra de la carrera abajo: dónde va cada uno
   function drawRaceBar() {
+    if (R && R.catchT > 0 && L && P && ['play', 'pause', 'respawn'].includes(G.state)) {
+      const sec = Math.ceil(R.catchT / 60), hot = sec <= 10;
+      txt(rivalName() + ' YA HA LLEGADO', W / 2, H - 60, { align: 'center', col: '#ff8ab0' });
+      txt('¡' + sec + ' s!', W / 2, H - (hot ? 48 : 46), { size: hot ? 24 : 16, align: 'center', col: hot && G.t % 30 < 15 ? '#ff4a4a' : '#ffe066' });
+    }
     if (!R || !L || !P || G.state === 'ending' || G.state === 'clear') return;
     const x0 = W / 2 - 110, w = 220, y = H - 12, goal = (L.isFinal ? L.arenaStart : L.goalCol) * T;
     ctx.fillStyle = 'rgba(10,6,24,0.7)'; ctx.fillRect(x0 - 32, y - 6, w + 64, 14);
@@ -3579,10 +3655,14 @@
     if (!R) { if ((G.t > 40 && Input.confirm()) || G.t > 480) beginPlay(); return; }
     // carrera: cuenta atrás cuando los dos están listos (o si el rival ya no está)
     if (R.count > 0) { if (--R.count === 0) beginPlay(); else if (R.count % 60 === 0) Sound.sfx.select(); return; }
+    // ya list@ y el rival sigue jugando otro nivel: se le mira jugar
+    const r = R.rival, watch = R.ready === G.levelIdx && Net.on && r && r.dx != null && r.lv !== G.levelIdx && ['play', 'cutscene', 'respawn', 'pause'].includes(r.st);
+    if (watch && (!R.spec || R.spec.lv !== r.lv)) specEnter(r.lv);
+    else if (!watch && R.spec) specExit();
     if (R.ready !== G.levelIdx) { if (G.t > 40 && Input.confirm()) { R.ready = G.levelIdx; Net.send({ t: 'ready', lv: G.levelIdx }); Sound.sfx.confirm(); } return; }
     // nunca se arranca solo por su cuenta: si el rival no está, hay que pedirlo
-    if (Net.on && R.rivalReady === G.levelIdx) R.count = 190;
-    else if (Input.backP() || (Net.status === 'lost' && Input.confirm())) { Sound.sfx.confirm(); R.count = 1; }
+    if (Net.on && R.rivalReady === G.levelIdx) { specExit(); R.count = 190; }
+    else if (Input.backP() || (Net.status === 'lost' && Input.confirm())) { specExit(); Sound.sfx.confirm(); R.count = 1; }
   }
   function drawRaceIntro() {
     if (!R) return;
@@ -3640,8 +3720,9 @@
   const FOOD_NAMES = { gazpacho: 'GAZPACHO', paella: 'PAELLA', cocido: 'COCIDO', cafe: 'BARRAQUITO' };
 
   // --- pausa
+  const pauseOpts = () => ['CONTINUAR', 'MÚSICA: ' + (Sound.musicOn ? 'SÍ' : 'NO'), 'EFECTOS: ' + (Sound.sfxOn ? 'SÍ' : 'NO')].concat(R ? ['RENDIRSE (SIGUIENTE NIVEL)'] : [], ['SALIR AL TÍTULO']);
   function updatePause() {
-    const opts = 4;
+    const opts = pauseOpts().length;
     if (Input.pressed('up')) { G.menu = (G.menu + opts - 1) % opts; Sound.sfx.select(); }
     if (Input.pressed('down')) { G.menu = (G.menu + 1) % opts; Sound.sfx.select(); }
     if (Input.pressed('back') || (Input.pressed('start') && G.menu === 0)) { G.state = 'play'; Sound.duck(false); Input.clear(); return; }
@@ -3650,6 +3731,7 @@
       if (G.menu === 0) { G.state = 'play'; Sound.duck(false); Input.clear(); }
       else if (G.menu === 1) { Sound.toggleMusic(); Sound.duck(true); }
       else if (G.menu === 2) Sound.toggleSfx();
+      else if (R && G.menu === 3) raceForfeit('surrender');
       else { saveHi(); Sound.duck(false); G.state = 'title'; G.t = 0; Sound.stop(); Sound.play('title'); }
     }
   }
@@ -3657,8 +3739,8 @@
     ctx.fillStyle = 'rgba(12,8,24,0.7)'; ctx.fillRect(0, 0, W, H);
     glassBox(170, 70, 300, 220, true, { fill: 'rgba(27,20,38,0.6)' });
     txt('PAUSA', W / 2, 88, { size: 16, align: 'center', col: '#ffe066' });
-    ['CONTINUAR', 'MÚSICA: ' + (Sound.musicOn ? 'SÍ' : 'NO'), 'EFECTOS: ' + (Sound.sfxOn ? 'SÍ' : 'NO'), 'SALIR AL TÍTULO'].forEach((o, i) => {
-      txt((G.menu === i ? '> ' : '  ') + o, 210, 126 + i * 22, { col: G.menu === i ? '#ffe066' : '#ffffff' });
+    pauseOpts().forEach((o, i) => {
+      txt((G.menu === i ? '> ' : '  ') + o, 186, 116 + i * 20, { col: G.menu === i ? '#ffe066' : '#ffffff' });
     });
     txt('ZXCV o HJKL: saltar, puño, patada, lanzar', W / 2, 228, { align: 'center', col: '#8affff' });
     txt('Pisa a los bichos (¡menos erizos', W / 2, 246, { align: 'center', col: '#c8c8e0' });
@@ -3679,7 +3761,12 @@
   }
   function updateGameover() {
     G.t++;
-    if (G.t > 60 && (Input.pressed('start') || (TCH() && G.t < 660 && Input.confirm()))) { G.lives = 5; G.score = 0; startLevelIntro(); return; }
+    if (G.t > 60 && (Input.pressed('start') || (TCH() && G.t < 660 && Input.confirm()))) {
+      G.lives = 5; G.score = 0;
+      const g = R && R.goals[G.levelIdx];
+      if (g && g.rival && !g.rival.forfeit) raceForfeit('time'); else startLevelIntro();
+      return;
+    }
     if (G.t > 60 && (Input.pressed('jump') || Input.pressed('punch')) && G.t > 660) { G.state = 'title'; G.t = 0; Sound.play('title'); }
     if (G.t > 660 + 60 * 5) { G.state = 'title'; G.t = 0; Sound.play('title'); }
   }
@@ -3701,13 +3788,13 @@
   const MEDAL_T0 = 20 + 6 * 14 + 10;
   function drawClear() {
     ctx.fillStyle = 'rgba(12,8,24,0.72)'; ctx.fillRect(0, 0, W, H);
-    txt('¡' + L.loc.short.toUpperCase() + ' SUPERADO!', W / 2, 50, { size: 16, align: 'center', col: '#ffe066' });
+    txt(L.forfeit === 'time' ? '¡SE ACABÓ EL TIEMPO!' : L.forfeit ? '¡TE HAS RENDIDO!' : '¡' + L.loc.short.toUpperCase() + ' SUPERADO!', W / 2, 50, { size: 16, align: 'center', col: '#ffe066' });
     txt(fill('...pero ' + (L.nick || CAT) + ' se ha escapado con {C}', G.C), W / 2, 80, { align: 'center', col: '#ff8ab0' });
     const b = L.bonus, got = L.got ? L.got.filter(Boolean).length : 0;
     const rows = [['Bichos vencidos', b.kills], ['Pesetas recogidas', b.coins], ['Letras MACHÍN', got + '/' + LETTERS.length + (got === LETTERS.length ? ' ¡TODAS!' : '')], ['Tiempo', b.secs + ' s'], ['Bonus tiempo', b.time], ['Bonus corazones', b.hearts]];
     rows.forEach(([k, v], i) => { if (G.t > 20 + i * 14) { txt(k, 190, 100 + i * 18); txt(String(v), 490, 100 + i * 18, { align: 'right', col: '#8affff' }); } });
     drawPresenter(12, 24, 110, 110, { t: G.t - 40 });
-    drawChar(G.hero, G.t < 40 ? WIN[1] : winFrame(G.t), 580, 236, -1, 1);
+    drawChar(G.hero, L.forfeit ? IDLE[Math.floor(G.t / 12) % 4] : G.t < 40 ? WIN[1] : winFrame(G.t), 580, 236, -1, 1);
     txt('PUNTUACIÓN  ' + String(G.score).padStart(7, '0'), W / 2, 214, { size: 16, align: 'center' });
     if (R && G.t > 20) {
       const w = raceWinner(G.levelIdx), tally = '   TÚ ' + raceWins('me') + ' - ' + raceWins('rival') + ' ' + rivalName();
@@ -3819,7 +3906,7 @@
       case 'select': drawSelect(); break;
       case 'difficulty': drawDifficulty(); break;
       case 'story': drawStory(); break;
-      case 'intro': drawIntro(); drawRaceIntro(); break;
+      case 'intro': if (R && R.spec) drawSpectate(); else { drawIntro(); drawRaceIntro(); } break;
       case 'play': case 'cutscene': case 'pause': case 'respawn': case 'gameover': case 'clear': case 'shop': case 'ending':
         drawWorld(); drawSlowmo(); if (!G.slow && G.state !== 'shop') drawHUD();
         if (G.state === 'pause') drawPause();
