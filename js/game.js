@@ -39,7 +39,7 @@
     addEventListener('keyup', e => { const a = KEYS[e.code]; if (a) { kb[a] = false; e.preventDefault(); } });
     addEventListener('blur', () => { for (const k in kb) kb[k] = false; });
     let clicks = 0;
-    addEventListener('pointerdown', () => { Sound.init(); clicks++; try { document.getElementById('game').focus(); } catch (e) {} });
+    addEventListener('pointerdown', e => { Sound.init(); if (e.target && e.target.tagName === 'INPUT') return; clicks++; try { document.getElementById('game').focus(); } catch (e) {} });
     addEventListener('gamepadconnected', () => { padMsg = 'MANDO CONECTADO'; padMsgT = 180; });
     addEventListener('gamepaddisconnected', () => { padMsg = 'MANDO DESCONECTADO'; padMsgT = 180; });
     function poll() {
@@ -67,7 +67,7 @@
     }
     const held = a => !!cur[a], pressed = a => !!cur[a] && !prev[a];
     return {
-      poll, held, pressed, get padMsg() { return padMsgT > 0 ? padMsg : ''; }, get pad() { return usingPad; },
+      poll, held, pressed, get padMsg() { return padMsgT > 0 ? padMsg : ''; }, get pad() { return usingPad || !!window.TV_PAD; },
       confirm: () => pressed('jump') || pressed('punch') || pressed('start') || !!cur.click,
       backP: () => pressed('kick') || pressed('back'),
       clear() { for (const a of ACTIONS) prev[a] = cur[a] = true; }, virt,
@@ -439,7 +439,9 @@
 
   function loadLevel(idx) {
     const loc = LOCATIONS[idx], isFinal = idx === LOCATIONS.length - 1;
-    const data = Level.generate(idx, G.diff, (Math.random() * 1e9) | 0, isFinal);
+    // en la carrera los dos generan el mismo nivel a partir de la semilla común
+    const seed = R ? (R.seed + idx * 7919) >>> 0 : (Math.random() * 1e9) | 0;
+    const data = Level.generate(idx, G.diff, seed, isFinal);
     L = Object.assign(data, assetsFor(idx), { loc, enemies: [], items: [], projs: [], parts: [], fx: [], props: [], texts: [], bubbles: [], camX: 0, camY: CAMY_MAX, timeLeft: TIME_LIMIT[G.diff] * 60, shake: 0,
       time: 0, kills: 0, coinsGot: 0, checkpointHit: false, bumps: [], boss: null, arenaLocked: false, multi: {}, snow: [], cs: null, catTauntT: 0 });
     data.coins.forEach(k => L.items.push(makeItem('peseta', k.col * T + 4, k.row * T + 4, true)));
@@ -2020,7 +2022,7 @@
   }
   function drawPlayer() {
     if (P.inv > 0 && !P.dead && Math.floor(P.inv / 3) % 2 === 0 && P.starT <= 0) return;
-    const f = playerFrame(), s = pScale();
+    const f = P.lastF = playerFrame(), s = pScale();
     let feet = P.y + P.h;
     const variant = P.starT > 0 ? Math.floor(P.anim / 3) : (P.power === 'fire' ? 'fire' : null);
     // recortado mientras entra o sale de una tubería
@@ -2560,6 +2562,7 @@
     L.enemies.forEach(e => { if (e.active || e.dead) drawEnemy(e); });
     drawBoss();
     drawCameo();
+    drawRival();
     if (!P.hidden) drawPlayer();
     drawObjs(true);
     if (L.cs && L.cs.draw) L.cs.draw();
@@ -2571,6 +2574,7 @@
       else ctx.fillRect(p.x, p.y, p.s * 0.75, p.s * 0.75);
     });
     ctx.restore(); curZ = 1;
+    drawRivalTag();
     // velo frío del gazpacho (parpadea cuando está a punto de acabarse)
     if (L.freezeT > 0 && (L.freezeT > 90 || G.t % 20 < 12)) { ctx.fillStyle = 'rgba(150,215,255,0.16)'; ctx.fillRect(0, 0, W, H); }
     // textos y bocadillos en coordenadas de pantalla (nítidos)
@@ -2744,6 +2748,7 @@
       ctx.restore();
     }
     const pm = Input.padMsg; if (pm) txt(pm, W / 2, 56, { align: 'center', col: '#8affff' });
+    drawRaceBar();
   }
 
   // ---------------------------------------------------------- FLUJO DE PARTIDA
@@ -3026,6 +3031,7 @@
   // --- escena de meta: el gato se escapa en globo
   function startGoalCutscene() {
     G.state = 'cutscene'; Sound.stop(); Sound.sfx.meow();
+    if (R) raceGoal('me');
     P.act = null; P.auto = 1; P.lock = true; P.inv = 0; P.hurtT = 0;
     const cx = L.catCol * T, gy = 12 * T, next = LOCATIONS[G.levelIdx + 1];
     L.enemies.forEach(e => { if (!e.dead && Math.abs(e.x - P.x) < 700) killEnemy(e, 'hit'); });
@@ -3067,8 +3073,8 @@
   function startClear() {
     G.state = 'clear'; G.t = 0; L.pres = null; L.mama = null;
     const secs = Math.floor(L.time / 60);
-    L.bonus = { time: Math.floor(L.timeLeft / 60) * 20, hearts: P.hearts * 500, kills: L.kills, coins: L.coinsGot, secs };
-    L.bonusPaid = 0; L.bonusTotal = L.bonus.time + L.bonus.hearts;
+    L.bonus = { time: Math.floor(L.timeLeft / 60) * 20, hearts: P.hearts * 500, kills: L.kills, coins: L.coinsGot, secs, race: R && raceWinner(G.levelIdx) === 'me' ? RACE_BONUS : 0 };
+    L.bonusPaid = 0; L.bonusTotal = L.bonus.time + L.bonus.hearts + L.bonus.race;
     awardMedals();
     Sound.sfx.clear();
   }
@@ -3082,6 +3088,7 @@
   // --- final
   function startEnding() {
     Sound.play('ending'); awardMedals();
+    if (R) { raceGoal('me'); if (raceWinner(G.levelIdx) === 'me') G.score += RACE_BONUS; }
     L.projs = []; L.endT = 0; P.act = null; P.vx = 0; P.hurtT = 0; P.inv = 0; P.starT = 0;
     const A = L.arenaStart;
     L.freedX = (A + 16) * T;
@@ -3124,6 +3131,7 @@
       txt(G.score >= G.hi ? '¡NUEVO RÉCORD!' : 'RÉCORD: ' + G.hi, W / 2, 230, { align: 'center', col: '#ff8ab0', alpha: a });
       if (L.medals) MEDAL_INFO.forEach(([icon], i) => drawMedal(W / 2 + (i - 1) * 28, 252, L.medals[i], icon, { r: 9, small: true, alpha: a }));
       txt('¡GRACIAS POR JUGAR!', W / 2, 272, { size: 16, align: 'center', col: '#ffffff', alpha: a });
+      if (R) txt('CARRERA: TÚ ' + raceWins('me') + ' - ' + raceWins('rival') + ' ' + rivalName() + '   (' + rivalName() + ' ' + rivalTxt(R.rival) + ')', W / 2, 292, { align: 'center', col: '#ff8ab0', alpha: a });
       drawPresenter(14, 20, 150, 96, { alpha: a, noCaption: true, caption: '¡BRAVO!' });
       if (e > 700 && G.t % 60 < 40) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / START', W / 2, 310, { align: 'center', col: '#ffe066' });
     }
@@ -3184,12 +3192,18 @@
     txt('MANDO  A saltar  X puño  B patada  Y/RB lanzar', W / 2, 334, { align: 'center', col: '#8affff' });
     txt('RÉCORD ' + String(G.hi).padStart(7, '0'), W - 8, 6, { align: 'right', col: '#ff8ab0' });
   }
-  function updateTitle() { G.t++; if (Input.confirm()) { Sound.init(); Sound.sfx.confirm(); G.state = 'select'; G.t = 0; G.menu = G.hero === 'boy' ? 0 : 1; Sound.play('title'); } if (G.t === 2) Sound.play('title'); }
+  function updateTitle() { G.t++; if (Input.confirm()) { Sound.init(); Sound.sfx.confirm(); G.state = 'mode'; G.t = 0; G.menu = 0; Sound.play('title'); } if (G.t === 2) Sound.play('title'); }
   function updateSelect() {
     G.t++;
     if (Input.pressed('left') || Input.pressed('right')) { G.menu = 1 - G.menu; Sound.sfx.select(); }
-    if (Input.backP()) { G.state = 'title'; Sound.sfx.select(); }
-    if (Input.confirm()) { G.hero = G.menu === 0 ? 'boy' : 'girl'; Sound.sfx.confirm(); G.state = 'difficulty'; G.menu = 1; G.t = 0; }
+    if (Input.backP()) { if (R) raceQuit(); G.state = 'mode'; G.menu = 0; Sound.sfx.select(); return; }
+    if (Input.confirm()) {
+      G.hero = G.menu === 0 ? 'boy' : 'girl'; Sound.sfx.confirm(); G.t = 0;
+      if (R) Net.send({ t: 'hello', h: G.hero });
+      // en la carrera, la dificultad la elige quien creó la partida
+      if (R && !Net.isHost) { G.state = 'lobby'; G.sub = 'wait'; }
+      else { G.state = 'difficulty'; G.menu = 1; }
+    }
   }
   function drawSelect() {
     if (photos.inicio) drawCover(photos.inicio); else drawParallaxBg(titleBg || 0, G.t * 0.6);
@@ -3215,13 +3229,18 @@
       txt('Rescata a ' + NAMES[who === 'boy' ? 'girl' : 'boy'], cx, by + bh - 18, { align: 'center', col: '#8aff8a' });
     });
     txt(TCH() ? 'JOYSTICK elegir     TOCA / SALTO confirmar' : 'IZQ/DER elegir     ENTER/A confirmar', W / 2, 340, { align: 'center', col: '#c8c8e0' });
+    if (R) txt('CARRERA CONTRA ' + rivalName() + ' (puede elegir el mismo personaje)', W / 2, 26, { align: 'center', col: '#ff8ab0' });
   }
   function updateDifficulty() {
     G.t++;
     if (Input.pressed('up')) { G.menu = (G.menu + 2) % 3; Sound.sfx.select(); }
     if (Input.pressed('down')) { G.menu = (G.menu + 1) % 3; Sound.sfx.select(); }
     if (Input.backP()) { G.state = 'select'; G.menu = G.hero === 'boy' ? 0 : 1; Sound.sfx.select(); }
-    if (Input.confirm()) { G.diff = ['facil', 'normal', 'dificil'][G.menu]; Sound.sfx.confirm(); startGame(); }
+    if (Input.confirm()) {
+      G.diff = ['facil', 'normal', 'dificil'][G.menu];
+      if (R) { const m = { t: 'start', diff: G.diff, seed: (Math.random() * 1e9) >>> 0 }; Net.send(m); raceStart(m); return; }
+      Sound.sfx.confirm(); startGame();
+    }
   }
   function drawDifficulty() {
     if (photos.inicio) drawCover(photos.inicio); else drawParallaxBg(titleBg || 0, G.t * 0.6);
@@ -3329,8 +3348,248 @@
     txt(TCH() ? 'PATADA: saltar la historia' : 'B / ESC: saltar la historia', W - 10, H - 12, { align: 'right', col: '#8a8aa8' });
   }
 
+  // ---------------------------------------------------------- CARRERA A DOS (por Internet)
+  // Los dos juegan el mismo nivel (misma semilla) a la vez, cada uno en su dispositivo, y ven
+  // al otro como un fantasma. Antes de cada nivel se esperan; gana el nivel quien llega antes a la meta.
+  let R = null; // null = partida de un jugador
+  const RACE_BONUS = 2000;
+  const RIVAL_TXT = { play: 'va por el {P}%', cutscene: '¡ha llegado a la meta!', clear: '¡ha llegado a la meta!', shop: 'está en el chiringuito',
+    intro: 'está listo', respawn: 'se ha caído...', gameover: 'se ha quedado sin vidas', pause: 'está en pausa', story: 'está viendo la historia',
+    ending: '¡ha llegado al final!', select: 'está eligiendo personaje', difficulty: 'está eligiendo dificultad', lobby: 'te está esperando' };
+  function raceNew() { R = { seed: 0, rival: null, rivalHero: 'girl', ready: -1, rivalReady: -1, count: 0, goals: {}, pendingStart: null, sendT: 0 }; }
+  function raceQuit() { Net.close(); R = null; }
+  const rivalName = () => R ? NAMES[R.rivalHero] : '';
+  const rivalTxt = r => !Net.on ? 'se ha desconectado' : !r ? 'se está conectando' : (RIVAL_TXT[r.st] || '').replace('{P}', Math.round((r.pr || 0) * 100));
+  function raceStart(m) { G.diff = m.diff; R.seed = m.seed >>> 0; R.pendingStart = null; R.goals = {}; R.ready = R.rivalReady = -1; Sound.sfx.confirm(); startGame(); }
+  // gana el nivel quien llegó primero; si los dos avisos se cruzan por el camino, decide el tiempo de juego
+  function raceWinner(lv) {
+    const g = R && R.goals[lv]; if (!g) return null;
+    if (g.me && g.rival) {
+      if (g.me.first !== g.rival.first) return g.me.first ? 'me' : 'rival';
+      return g.me.time !== g.rival.time ? (g.me.time < g.rival.time ? 'me' : 'rival') : (Net.isHost ? 'me' : 'rival');
+    }
+    return g.me ? 'me' : g.rival ? 'rival' : null;
+  }
+  const raceWins = who => Object.keys(R.goals).filter(lv => raceWinner(+lv) === who).length;
+  function raceGoal(who, m) {
+    const lv = who === 'me' ? G.levelIdx : m.lv, g = R.goals[lv] = R.goals[lv] || {};
+    if (g[who]) return;
+    if (who === 'me') { g.me = { time: L.time, first: !g.rival }; Net.send({ t: 'goal', lv, time: L.time, first: g.me.first }); }
+    else {
+      g.rival = { time: m.time, first: m.first };
+      if (lv === G.levelIdx && G.state === 'play' && L) { popText(P.x + P.w / 2, P.y - 40, '¡' + rivalName() + ' HA LLEGADO A LA META!', '#ff8ab0'); Sound.sfx.hurt(); }
+    }
+  }
+  Net.onMsg = m => {
+    if (!R) return;
+    if (m.t === 'hello') R.rivalHero = m.h === 'boy' ? 'boy' : 'girl';
+    else if (m.t === 'start') { R.pendingStart = m; if (G.state === 'lobby' && G.sub === 'wait') raceStart(m); }
+    else if (m.t === 'ready') R.rivalReady = m.lv;
+    else if (m.t === 'goal') raceGoal('rival', m);
+    else if (m.t === 's') {
+      const r = R.rival = R.rival || {};
+      Object.assign(r, m);
+      if (r.x != null && (r.dx == null || Math.abs(r.x - r.dx) > 240 || Math.abs(r.y - r.dy) > 240)) { r.dx = r.x; r.dy = r.y; }
+    }
+  };
+  Net.onStatus = st => {
+    if (!R) return;
+    if (st === 'connected' && G.state === 'lobby') {
+      Sound.sfx.confirm(); Net.send({ t: 'hello', h: G.hero });
+      G.state = 'select'; G.t = 0; G.menu = G.hero === 'boy' ? 0 : 1;
+    } else if (st === 'lost' || st === 'error') {
+      // antes de empezar se vuelve al menú; con la partida en marcha se sigue en solitario
+      if (['lobby', 'select', 'difficulty'].includes(G.state) && st === 'lost') { R = null; G.state = 'mode'; G.menu = 1; G.netMsg = Net.err; G.netMsgT = 300; }
+      else if (L && (G.state === 'play' || G.state === 'cutscene')) popText(P.x + P.w / 2, P.y - 40, Net.err.toUpperCase(), '#ff8a8a');
+    }
+  };
+  // cada 3 fotogramas: dónde estoy y qué hago
+  function raceTick() {
+    if (!R) return;
+    const r = R.rival;
+    if (r && r.x != null) { r.dx += (r.x - r.dx) * 0.3; r.dy += (r.y - r.dy) * 0.3; }
+    if (!Net.on || ++R.sendT % 3) return;
+    const m = { t: 's', st: G.state, lv: G.levelIdx, sc: G.score };
+    if (L && P && ['play', 'cutscene', 'respawn', 'pause', 'ending'].includes(G.state)) {
+      const goal = (L.isFinal ? L.arenaStart : L.goalCol) * T;
+      Object.assign(m, { x: Math.round(P.x + P.w / 2), y: Math.round(P.y + P.h), fa: P.face, f: P.lastF ?? IDLE[0], s: pScale(),
+        v: P.starT > 0 ? 'r' : P.power === 'fire' ? 'fire' : null, rm: inRoom() || P.hidden || P.dead ? 1 : 0, pr: Math.max(0, Math.min(1, P.x / goal)) });
+    }
+    Net.send(m);
+  }
+  const rivalHere = () => { const r = R && R.rival; return r && Net.on && r.lv === G.levelIdx && r.dx != null && !r.rm && ['play', 'cutscene', 'respawn', 'pause', 'ending'].includes(r.st); };
+  // el rival, medio transparente, en el mundo (se llama con la cámara ya puesta)
+  function drawRival() {
+    if (!rivalHere()) return;
+    const r = R.rival;
+    ctx.save(); ctx.globalAlpha = 0.55;
+    drawChar(R.rivalHero, r.f, r.dx, r.dy, r.fa, r.s || 1, r.v === 'r' ? Math.floor(G.t / 3) : r.v);
+    ctx.restore();
+  }
+  // en coordenadas de pantalla: su nombre encima, o una flecha en el borde si está fuera de la vista
+  function drawRivalTag() {
+    if (!rivalHere()) return;
+    const r = R.rival, p = toScreen(r.dx, r.dy - 60 * (r.s || 1)), name = '2P ' + rivalName();
+    if (p.x > -10 && p.x < W + 10) { txt(name, Math.max(40, Math.min(W - 40, p.x)), Math.max(50, p.y - 12), { align: 'center', col: '#ff8ab0' }); return; }
+    const right = p.x >= W, x = right ? W - 12 : 12, y = Math.max(70, Math.min(H - 40, p.y + 20)), m = Math.round(Math.abs(r.dx - (P.x + P.w / 2)) / T);
+    ctx.fillStyle = '#ff8ab0'; ctx.beginPath(); ctx.moveTo(right ? W - 2 : 2, y); ctx.lineTo(x, y - 8); ctx.lineTo(x, y + 8); ctx.fill();
+    txt(name, right ? W - 18 : 18, y - 10, { align: right ? 'right' : 'left', col: '#ff8ab0' });
+    txt(m + ' m', right ? W - 18 : 18, y + 2, { align: right ? 'right' : 'left', col: '#ffffff' });
+  }
+  // barra de la carrera abajo: dónde va cada uno
+  function drawRaceBar() {
+    if (!R || !L || !P || G.state === 'ending' || G.state === 'clear') return;
+    const x0 = W / 2 - 110, w = 220, y = H - 12, goal = (L.isFinal ? L.arenaStart : L.goalCol) * T;
+    ctx.fillStyle = 'rgba(10,6,24,0.7)'; ctx.fillRect(x0 - 32, y - 6, w + 64, 14);
+    ctx.fillStyle = '#3a2a5a'; ctx.fillRect(x0, y, w, 3);
+    txt('META', x0 + w + 4, y - 3, { col: '#ffe066' });
+    const dot = (k, col, lbl) => { const x = x0 + w * Math.max(0, Math.min(1, k)); ctx.fillStyle = '#1b1426'; ctx.fillRect(x - 4, y - 3, 9, 9); ctx.fillStyle = col; ctx.fillRect(x - 3, y - 2, 7, 7); txt(lbl, x0 - 28, y - 3, { col }); };
+    const r = R.rival;
+    if (r && Net.on && r.lv === G.levelIdx) dot(r.st === 'cutscene' || r.st === 'clear' ? 1 : r.pr || 0, '#ff8ab0', '');
+    dot(P.x / goal, '#ffe066', Net.on ? 'TÚ' : 'SOLO');
+  }
+
+  // --- menú: uno o dos jugadores
+  const MODE_OPTS = [['1 JUGADOR', 'La aventura de siempre.'], ['2 JUGADORES: CREAR PARTIDA', 'Te damos un código para que tu rival se una.'], ['2 JUGADORES: UNIRSE', 'Escribe el código que te ha dado tu rival.']];
+  function updateMode() {
+    G.t++; if (G.netMsgT > 0) G.netMsgT--;
+    if (Input.pressed('up')) { G.menu = (G.menu + 2) % 3; Sound.sfx.select(); }
+    if (Input.pressed('down')) { G.menu = (G.menu + 1) % 3; Sound.sfx.select(); }
+    if (Input.backP()) { G.state = 'title'; G.t = 0; Sound.sfx.select(); return; }
+    if (!Input.confirm()) return;
+    Sound.sfx.confirm(); G.t = 0; G.netMsgT = 0;
+    if (G.menu === 0) { G.state = 'select'; G.menu = G.hero === 'boy' ? 0 : 1; }
+    else if (G.menu === 1) { raceNew(); Net.host(); G.state = 'lobby'; G.sub = 'net'; }
+    else { G.state = 'join'; G.code = [1, 0, 0, 0]; G.menu = 0; codeInputReset(); }
+  }
+  function menuBg(a) { if (photos.inicio) drawCover(photos.inicio); else drawParallaxBg(titleBg || 0, G.t * 0.6); ctx.fillStyle = `rgba(12,8,24,${a})`; ctx.fillRect(0, 0, W, H); }
+  function drawMode() {
+    menuBg(0.6);
+    txt('¿CUÁNTOS JUGADORES?', W / 2, 20, { size: 16, align: 'center', col: '#ffe066' });
+    MODE_OPTS.forEach(([name, desc], i) => {
+      const sel = G.menu === i, y = 56 + i * 76;
+      glassBox(82, y, 476, 64, sel);
+      txt(name, 110, y + 14, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
+      txt(desc, 110, y + 40, { col: '#8affff' });
+      if (sel && G.t % 40 < 28) txt('>', 90, y + 16, { col: '#ffe066' });
+    });
+    if (G.netMsgT > 0) txt(G.netMsg, W / 2, 294, { align: 'center', col: '#ff8a8a' });
+    txt('A dos: cada uno en su móvil, tablet u ordenador, con Internet', W / 2, 314, { align: 'center', col: '#ff8ab0' });
+    txt(TCH() ? 'JOYSTICK elegir   TOCA / SALTO aceptar   PATADA volver' : 'ARRIBA/ABAJO elegir   ENTER/A aceptar   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
+  }
+
+  // --- escribir el código para unirse (flechas, teclas numéricas o, en el móvil, el teclado del sistema)
+  let codeInput = null;
+  function codeInputReset() { if (codeInput) codeInput.value = ''; }
+  function syncCodeInput() {
+    const want = G.state === 'join' && TCH();
+    if (want && !codeInput) {
+      codeInput = document.createElement('input');
+      Object.assign(codeInput, { type: 'tel', inputMode: 'numeric', maxLength: 4, placeholder: '----', autocomplete: 'off' });
+      codeInput.setAttribute('aria-label', 'Código de la partida');
+      Object.assign(codeInput.style, { position: 'fixed', left: '50%', top: '58%', transform: 'translate(-50%,-50%)', zIndex: 20, width: '7em', padding: '10px',
+        font: '24px "Press Start 2P", monospace', textAlign: 'center', letterSpacing: '0.3em', color: '#ffe066', background: 'rgba(27,20,38,0.95)',
+        border: '3px solid #ffe066', borderRadius: '8px', outline: 'none' });
+      codeInput.addEventListener('input', () => {
+        const d = codeInput.value.replace(/\D/g, '').slice(0, 4); codeInput.value = d;
+        G.code = [0, 1, 2, 3].map(i => +(d[i] || 0)); G.menu = Math.min(3, d.length);
+        if (d.length === 4) { codeInput.blur(); joinGo(); }
+      });
+      document.body.appendChild(codeInput);
+    }
+    if (codeInput) codeInput.style.display = want ? 'block' : 'none';
+  }
+  addEventListener('keydown', e => {
+    if (G.state !== 'join' || e.target === codeInput || !/^[0-9]$/.test(e.key)) return;
+    G.code[G.menu] = +e.key; Sound.sfx.select();
+    if (G.menu < 3) G.menu++; else joinGo();
+  });
+  function joinGo() { if (G.state !== 'join') return; raceNew(); Net.join(G.code.join('')); G.state = 'lobby'; G.sub = 'net'; G.t = 0; Sound.sfx.confirm(); }
+  function updateJoin() {
+    G.t++;
+    if (Input.pressed('up')) { G.code[G.menu] = (G.code[G.menu] + 1) % 10; Sound.sfx.select(); }
+    if (Input.pressed('down')) { G.code[G.menu] = (G.code[G.menu] + 9) % 10; Sound.sfx.select(); }
+    if (Input.pressed('right') && G.menu < 3) { G.menu++; Sound.sfx.select(); }
+    if (Input.pressed('left') && G.menu > 0) { G.menu--; Sound.sfx.select(); }
+    if (Input.backP()) { if (G.menu > 0 && !TCH()) G.menu--; else { G.state = 'mode'; G.menu = 2; } Sound.sfx.select(); return; }
+    if (Input.pressed('jump') || Input.pressed('punch') || Input.pressed('start')) joinGo();
+  }
+  function drawJoin() {
+    menuBg(0.65);
+    txt('UNIRSE A UNA PARTIDA', W / 2, 20, { size: 16, align: 'center', col: '#ffe066' });
+    txt('Pide a tu rival el código de 4 cifras que le sale en pantalla', W / 2, 54, { align: 'center', col: '#ffffff' });
+    if (TCH()) { txt('Toca el recuadro y escríbelo', W / 2, 150, { size: 16, align: 'center', col: '#8affff' }); }
+    else {
+      G.code.forEach((d, i) => {
+        const x = W / 2 - 126 + i * 66, y = 110, sel = G.menu === i;
+        glassBox(x, y, 54, 70, sel);
+        txt(String(d), x + 27, y + 24, { size: 24, align: 'center', col: sel ? '#ffe066' : '#ffffff' });
+        if (sel) { txt('▲', x + 27, y - 14, { align: 'center', col: '#ffe066' }); txt('▼', x + 27, y + 76, { align: 'center', col: '#ffe066' }); }
+      });
+      txt('Escribe las cifras o usa ARRIBA/ABAJO e IZQ/DER', W / 2, 220, { align: 'center', col: '#8affff' });
+    }
+    txt(TCH() ? 'PATADA volver' : 'ENTER/A unirse   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
+  }
+
+  // --- sala de espera: creando la partida, conectando o esperando a que el anfitrión elija dificultad
+  function updateLobby() {
+    G.t++;
+    if (G.sub === 'wait' && R && R.pendingStart) { raceStart(R.pendingStart); return; }
+    if (Input.backP() || (Net.status === 'error' && Input.confirm())) {
+      Sound.sfx.select(); const host = Net.isHost; raceQuit(); G.state = 'mode'; G.menu = host ? 1 : 2; G.t = 0;
+    }
+  }
+  function drawLobby() {
+    menuBg(0.65);
+    const st = Net.status, dots = '.'.repeat(1 + Math.floor(G.t / 20) % 3);
+    txt(Net.isHost ? 'CREAR PARTIDA' : 'UNIRSE A UNA PARTIDA', W / 2, 20, { size: 16, align: 'center', col: '#ffe066' });
+    if (st === 'error') {
+      txt(Net.err, W / 2, 140, { size: 16, align: 'center', col: '#ff8a8a' });
+      txt('Comprueba el código y que los dos tengáis Internet', W / 2, 176, { align: 'center', col: '#ffffff' });
+    } else if (G.sub === 'wait') {
+      drawChar(G.hero, IDLE[Math.floor(G.t / 12) % 4], W / 2 - 90, 220, 1, 1);
+      drawChar(R.rivalHero, IDLE[Math.floor(G.t / 12 + 2) % 4], W / 2 + 90, 220, -1, 1);
+      txt('VS', W / 2, 160, { size: 24, align: 'center', col: '#ff8ab0' });
+      txt('¡Conectados!', W / 2, 60, { size: 16, align: 'center', col: '#8aff8a' });
+      txt('Tu rival está eligiendo la dificultad' + dots, W / 2, 256, { align: 'center', col: '#ffffff' });
+    } else if (Net.isHost && st === 'hosting') {
+      txt('TU CÓDIGO', W / 2, 64, { align: 'center', col: '#c8c8e0' });
+      glassBox(W / 2 - 130, 80, 260, 70, true);
+      txt(Net.code.split('').join(' '), W / 2, 100, { size: 32, align: 'center', col: '#ffe066' });
+      txt('Díselo a tu rival: en su pantalla debe elegir', W / 2, 176, { align: 'center', col: '#ffffff' });
+      txt('2 JUGADORES: UNIRSE y escribirlo', W / 2, 190, { align: 'center', col: '#8affff' });
+      txt('Esperando a tu rival' + dots, W / 2, 236, { size: 16, align: 'center', col: '#ff8ab0' });
+    } else {
+      txt(st === 'joining' ? 'Conectando con la partida ' + Net.code + dots : 'Preparando la partida' + dots, W / 2, 150, { size: 16, align: 'center', col: '#ffffff' });
+    }
+    txt(TCH() ? 'PATADA cancelar' : 'C/B cancelar', W / 2, 340, { align: 'center', col: '#c8c8e0' });
+  }
+
   // --- intro de nivel
-  function updateIntro() { G.t++; if (G.t === 10) Sound.sfx.select(); if ((G.t > 40 && Input.confirm()) || G.t > 480) beginPlay(); }
+  function updateIntro() {
+    G.t++; if (G.t === 10) Sound.sfx.select();
+    if (!R) { if ((G.t > 40 && Input.confirm()) || G.t > 480) beginPlay(); return; }
+    // carrera: cuenta atrás cuando los dos están listos (o si el rival ya no está)
+    if (R.count > 0) { if (--R.count === 0) beginPlay(); else if (R.count % 60 === 0) Sound.sfx.select(); return; }
+    if (R.ready !== G.levelIdx) { if ((G.t > 40 && Input.confirm()) || G.t > 480) { R.ready = G.levelIdx; Net.send({ t: 'ready', lv: G.levelIdx }); Sound.sfx.confirm(); } return; }
+    if (R.rivalReady === G.levelIdx || !Net.on) R.count = Net.on ? 190 : 1;
+    else if (Input.backP()) { Sound.sfx.confirm(); R.count = 1; }
+  }
+  function drawRaceIntro() {
+    if (!R) return;
+    if (R.count > 0) {
+      ctx.fillStyle = 'rgba(12,8,24,0.6)'; ctx.fillRect(0, 0, W, H);
+      const n = Math.ceil((R.count - 10) / 60);
+      txt(n > 0 ? String(n) : '¡YA!', W / 2, H / 2 - 24, { size: 32, align: 'center', col: n > 0 ? '#ffffff' : '#8aff8a' });
+      txt('¡CARRERA CONTRA ' + rivalName() + '!', W / 2, H / 2 + 24, { align: 'center', col: '#ff8ab0' });
+      return;
+    }
+    ctx.fillStyle = 'rgba(10,6,24,0.85)'; ctx.fillRect(0, 0, W, 36);
+    const vs = Object.keys(R.goals).length ? '   CARRERA: TÚ ' + raceWins('me') + ' - ' + raceWins('rival') + ' ' + rivalName() : '';
+    if (R.ready !== G.levelIdx) txt((TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / A') + ' cuando estés list' + (G.hero === 'boy' ? 'o' : 'a') + vs, W / 2, 6, { align: 'center', col: '#ffe066' });
+    else txt('Esperando a ' + rivalName() + '.'.repeat(1 + Math.floor(G.t / 20) % 3) + vs, W / 2, 6, { align: 'center', col: '#ffe066' });
+    txt('2P ' + rivalName() + ' ' + rivalTxt(R.rival) + (R.ready === G.levelIdx ? (TCH() ? '   (PATADA: empezar sin esperar)' : '   (C/B: empezar sin esperar)') : ''), W / 2, 20, { align: 'center', col: '#ff8ab0' });
+  }
   function drawIntro() {
     ctx.fillStyle = '#0c0818'; ctx.fillRect(0, 0, W, H);
     const a = assetsFor(G.levelIdx);
@@ -3434,6 +3693,10 @@
     drawPresenter(12, 24, 110, 110, { t: G.t - 40 });
     drawChar(G.hero, G.t < 40 ? WIN[1] : winFrame(G.t), 580, 236, -1, 1);
     txt('PUNTUACIÓN  ' + String(G.score).padStart(7, '0'), W / 2, 214, { size: 16, align: 'center' });
+    if (R && G.t > 20) {
+      const w = raceWinner(G.levelIdx), tally = '   TÚ ' + raceWins('me') + ' - ' + raceWins('rival') + ' ' + rivalName();
+      txt((w === 'me' ? '¡LLEGASTE ANTES QUE ' + rivalName() + '! +' + RACE_BONUS : rivalName() + ' LLEGÓ ANTES') + tally, W / 2, 236, { align: 'center', col: w === 'me' ? '#8aff8a' : '#ff8ab0' });
+    }
     // medallas: salen de una en una
     MEDAL_INFO.forEach(([icon, name], i) => {
       const t = G.t - MEDAL_T0 - i * 22; if (t < 0) return;
@@ -3509,7 +3772,10 @@
     if (Input.pressed('mute')) Sound.toggleMusic();
     if (Input.pressed('full')) { try { if (window.toggleFullscreen) toggleFullscreen(); else if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen(); } catch (e) {} }
     switch (G.state) {
-      case 'title': updateTitle(); break;
+      case 'title': if (R) raceQuit(); updateTitle(); break;
+      case 'mode': updateMode(); break;
+      case 'join': updateJoin(); break;
+      case 'lobby': updateLobby(); break;
       case 'select': updateSelect(); break;
       case 'difficulty': updateDifficulty(); break;
       case 'story': updateStory(); break;
@@ -3523,6 +3789,7 @@
       case 'gameover': updateGameover(); break;
       case 'ending': updateEnding(); updateBossIdle(); break;
     }
+    raceTick(); syncCodeInput();
   }
   function updateBossIdle() { const B = L.boss; if (B) { B.t++; B.vy = Math.min(B.vy + 0.5, 10); physY(B); } }
   function render() {
@@ -3530,10 +3797,13 @@
     switch (G.state) {
       case 'loading': ctx.fillStyle = '#0c0818'; ctx.fillRect(0, 0, W, H); txt('CARGANDO...', W / 2, H / 2, { align: 'center' }); break;
       case 'title': drawTitle(); break;
+      case 'mode': drawMode(); break;
+      case 'join': drawJoin(); break;
+      case 'lobby': drawLobby(); break;
       case 'select': drawSelect(); break;
       case 'difficulty': drawDifficulty(); break;
       case 'story': drawStory(); break;
-      case 'intro': drawIntro(); break;
+      case 'intro': drawIntro(); drawRaceIntro(); break;
       case 'play': case 'cutscene': case 'pause': case 'respawn': case 'gameover': case 'clear': case 'shop': case 'ending':
         drawWorld(); drawSlowmo(); if (!G.slow && G.state !== 'shop') drawHUD();
         if (G.state === 'pause') drawPause();

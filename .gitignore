@@ -3,3 +3,5 @@ dist/
 Thumbs.db
 Desktop.ini
 .claude/
+build/
+android/*.keystore
