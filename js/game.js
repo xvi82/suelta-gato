@@ -3354,13 +3354,13 @@
   let R = null; // null = partida de un jugador
   const RACE_BONUS = 2000;
   const RIVAL_TXT = { play: 'va por el {P}%', cutscene: '¡ha llegado a la meta!', clear: '¡ha llegado a la meta!', shop: 'está en el chiringuito',
-    intro: 'está listo', respawn: 'se ha caído...', gameover: 'se ha quedado sin vidas', pause: 'está en pausa', story: 'está viendo la historia',
+    intro: 'está a punto de empezar', respawn: 'se ha caído...', gameover: 'se ha quedado sin vidas', pause: 'está en pausa', story: 'está viendo la historia',
     ending: '¡ha llegado al final!', select: 'está eligiendo personaje', difficulty: 'está eligiendo dificultad', lobby: 'te está esperando' };
   function raceNew() { R = { seed: 0, rival: null, rivalHero: 'girl', ready: -1, rivalReady: -1, count: 0, goals: {}, pendingStart: null, sendT: 0 }; }
   function raceQuit() { Net.close(); R = null; }
   const rivalName = () => R ? NAMES[R.rivalHero] : '';
-  const rivalTxt = r => !Net.on ? 'se ha desconectado' : !r ? 'se está conectando' : (RIVAL_TXT[r.st] || '').replace('{P}', Math.round((r.pr || 0) * 100));
-  function raceStart(m) { G.diff = m.diff; R.seed = m.seed >>> 0; R.pendingStart = null; R.goals = {}; R.ready = R.rivalReady = -1; Sound.sfx.confirm(); startGame(); }
+  const rivalTxt = r => Net.status === 'reconnecting' ? 'se ha cortado la conexión, reconectando...' : !Net.on ? 'se ha desconectado'  : !r ? 'se está conectando' : (RIVAL_TXT[r.st] || '').replace('{P}', Math.round((r.pr || 0) * 100));
+  function raceStart(m) { R.startMsg = m; G.diff = m.diff; R.seed = m.seed >>> 0; R.pendingStart = null; R.goals = {}; R.ready = R.rivalReady = -1; Sound.sfx.confirm(); startGame(); }
   // gana el nivel quien llegó primero; si los dos avisos se cruzan por el camino, decide el tiempo de juego
   function raceWinner(lv) {
     const g = R && R.goals[lv]; if (!g) return null;
@@ -3394,9 +3394,17 @@
   };
   Net.onStatus = st => {
     if (!R) return;
-    if (st === 'connected' && G.state === 'lobby') {
+    if (st === 'connected' && G.state === 'lobby' && G.sub !== 'wait') {
       Sound.sfx.confirm(); Net.send({ t: 'hello', h: G.hero });
       G.state = 'select'; G.t = 0; G.menu = G.hero === 'boy' ? 0 : 1;
+    } else if (st === 'connected') {
+      // reconectados: se repite lo que el otro se pudo perder mientras tanto
+      Net.send({ t: 'hello', h: G.hero });
+      if (Net.isHost && R.startMsg) Net.send(R.startMsg);
+      if (R.ready >= 0) Net.send({ t: 'ready', lv: R.ready });
+      if (L && P && (G.state === 'play' || G.state === 'cutscene')) popText(P.x + P.w / 2, P.y - 40, '¡CONEXIÓN RECUPERADA!', '#8aff8a');
+    } else if (st === 'reconnecting') {
+      if (L && P && (G.state === 'play' || G.state === 'cutscene')) popText(P.x + P.w / 2, P.y - 40, 'SE HA CORTADO LA CONEXIÓN... RECONECTANDO', '#ffb060');
     } else if (st === 'lost' || st === 'error') {
       // antes de empezar se vuelve al menú; con la partida en marcha se sigue en solitario
       if (['lobby', 'select', 'difficulty'].includes(G.state) && st === 'lost') { R = null; G.state = 'mode'; G.menu = 1; G.netMsg = Net.err; G.netMsgT = 300; }
@@ -3571,9 +3579,10 @@
     if (!R) { if ((G.t > 40 && Input.confirm()) || G.t > 480) beginPlay(); return; }
     // carrera: cuenta atrás cuando los dos están listos (o si el rival ya no está)
     if (R.count > 0) { if (--R.count === 0) beginPlay(); else if (R.count % 60 === 0) Sound.sfx.select(); return; }
-    if (R.ready !== G.levelIdx) { if ((G.t > 40 && Input.confirm()) || G.t > 480) { R.ready = G.levelIdx; Net.send({ t: 'ready', lv: G.levelIdx }); Sound.sfx.confirm(); } return; }
-    if (R.rivalReady === G.levelIdx || !Net.on) R.count = Net.on ? 190 : 1;
-    else if (Input.backP()) { Sound.sfx.confirm(); R.count = 1; }
+    if (R.ready !== G.levelIdx) { if (G.t > 40 && Input.confirm()) { R.ready = G.levelIdx; Net.send({ t: 'ready', lv: G.levelIdx }); Sound.sfx.confirm(); } return; }
+    // nunca se arranca solo por su cuenta: si el rival no está, hay que pedirlo
+    if (Net.on && R.rivalReady === G.levelIdx) R.count = 190;
+    else if (Input.backP() || (Net.status === 'lost' && Input.confirm())) { Sound.sfx.confirm(); R.count = 1; }
   }
   function drawRaceIntro() {
     if (!R) return;
@@ -3584,11 +3593,18 @@
       txt('¡CARRERA CONTRA ' + rivalName() + '!', W / 2, H / 2 + 24, { align: 'center', col: '#ff8ab0' });
       return;
     }
-    ctx.fillStyle = 'rgba(10,6,24,0.85)'; ctx.fillRect(0, 0, W, 36);
-    const vs = Object.keys(R.goals).length ? '   CARRERA: TÚ ' + raceWins('me') + ' - ' + raceWins('rival') + ' ' + rivalName() : '';
-    if (R.ready !== G.levelIdx) txt((TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / A') + ' cuando estés list' + (G.hero === 'boy' ? 'o' : 'a') + vs, W / 2, 6, { align: 'center', col: '#ffe066' });
-    else txt('Esperando a ' + rivalName() + '.'.repeat(1 + Math.floor(G.t / 20) % 3) + vs, W / 2, 6, { align: 'center', col: '#ffe066' });
-    txt('2P ' + rivalName() + ' ' + rivalTxt(R.rival) + (R.ready === G.levelIdx ? (TCH() ? '   (PATADA: empezar sin esperar)' : '   (C/B: empezar sin esperar)') : ''), W / 2, 20, { align: 'center', col: '#ff8ab0' });
+    ctx.fillStyle = 'rgba(10,6,24,0.88)'; ctx.fillRect(0, 0, W, 48);
+    const vs = Object.keys(R.goals).length ? 'CARRERA: TÚ ' + raceWins('me') + ' - ' + raceWins('rival') + ' ' + rivalName() : '';
+    const ready = R.ready === G.levelIdx, gone = Net.status === 'lost', dots = '.'.repeat(1 + Math.floor(G.t / 20) % 3);
+    const rivalOk = Net.on && R.rivalReady === G.levelIdx;
+    if (!ready) txt((TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / A') + ' CUANDO ESTÉS LIST' + (G.hero === 'boy' ? 'O' : 'A'), W / 2, 4, { size: 16, align: 'center', col: G.t % 50 < 34 ? '#ffe066' : '#ffffff' });
+    else if (gone) txt(rivalName() + ' SE HA DESCONECTADO', W / 2, 4, { size: 16, align: 'center', col: '#ff8a8a' });
+    else txt('ESPERANDO A ' + rivalName() + dots, W / 2, 4, { size: 16, align: 'center', col: '#ffe066' });
+    const b = gone ? (TCH() ? 'TOCA LA PANTALLA para jugar sin rival' : 'ENTER / A para jugar sin rival')
+      : '2P ' + rivalName() + (rivalOk ? ' ¡está listo!' : ' ' + rivalTxt(R.rival));
+    txt(b, W / 2, 24, { align: 'center', col: rivalOk ? '#8aff8a' : '#ff8ab0' });
+    const c = [vs, ready && !gone ? (TCH() ? '(PATADA: jugar sin esperar)' : '(C/B: jugar sin esperar)') : ''].filter(Boolean).join('   ');
+    if (c) txt(c, W / 2, 36, { align: 'center', col: '#c8c8e0' });
   }
   function drawIntro() {
     ctx.fillStyle = '#0c0818'; ctx.fillRect(0, 0, W, H);
