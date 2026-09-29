@@ -4130,10 +4130,10 @@
     txt('¿A QUÉ QUERÉIS JUGAR?', W / 2, 20, { size: 16, align: 'center', col: '#ffe066' });
     NETMODE_OPTS.forEach(([name, desc], i) => {
       const sel = G.menu === i, y = 80 + i * 90;
-      glassBox(82, y, 476, 70, sel);
-      txt(name, 110, y + 16, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
-      txt(desc, 110, y + 44, { col: '#8affff' });
-      if (sel && G.t % 40 < 28) txt('>', 90, y + 18, { col: '#ffe066' });
+      glassBox(32, y, 576, 70, sel);
+      txt(name, 58, y + 16, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
+      txt(desc, 58, y + 44, { col: '#8affff' });
+      if (sel && G.t % 40 < 28) txt('>', 40, y + 18, { col: '#ffe066' });
     });
     txt(TCH() ? 'JOYSTICK elegir   TOCA / SALTO aceptar   PATADA volver' : 'ARRIBA/ABAJO elegir   ENTER/A aceptar   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
   }
@@ -4143,10 +4143,11 @@
     txt('¿CUÁNTOS JUGADORES?', W / 2, 20, { size: 16, align: 'center', col: '#ffe066' });
     MODE_OPTS.forEach(([name, desc], i) => {
       const sel = G.menu === i, y = 46 + i * 62;
-      glassBox(62, y, 516, 54, sel);
-      txt(name, 90, y + 12, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
-      txt(desc, 90, y + 34, { col: '#8affff' });
-      if (sel && G.t % 40 < 28) txt('>', 70, y + 14, { col: '#ffe066' });
+      // cajas anchas: "2 JUGADORES POR INTERNET: UNIRSE" ocupa 512 px a tamaño 16
+      glassBox(32, y, 576, 54, sel);
+      txt(name, 58, y + 12, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
+      txt(desc, 58, y + 34, { col: '#8affff' });
+      if (sel && G.t % 40 < 28) txt('>', 40, y + 14, { col: '#ffe066' });
     });
     if (G.netMsgT > 0) txt(G.netMsg, W / 2, 296, { align: 'center', col: '#ff8a8a' });
     txt(G.menu === 1 ? (Input.pads >= 1 ? 'Mandos conectados: ' + Input.pads : 'Conecta un mando para el jugador 2 (el 1 puede usar el teclado)') : 'Por Internet: cada uno en su móvil, tablet u ordenador', W / 2, 314, { align: 'center', col: '#ff8ab0' });
