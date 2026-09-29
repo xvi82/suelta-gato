@@ -2,6 +2,8 @@
 //  AUDIO: efectos y música chiptune sintetizados con WebAudio
 // ============================================================
 const Sound = (() => {
+  // copia propia de Math: en el cooperativo por Internet el juego cambia Math.random/sin/cos mientras simula, y esto no debe notarlo
+  const Math = Object.getOwnPropertyNames(globalThis.Math).reduce((m, k) => (m[k] = globalThis.Math[k], m), {});
   let ctx = null, master, sfxBus, musicBus, noiseBuf, pulse25, pulse12;
   let musicOn = true, sfxOn = true;
   const prefs = (() => { try { return JSON.parse(localStorage.getItem('suelta-gato-audio') || '{}'); } catch (e) { return {}; } })();

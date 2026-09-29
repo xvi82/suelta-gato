@@ -13,7 +13,10 @@
 
   const W = 640, H = 360, T = TILE;
   // El mundo se dibuja ampliado (personajes grandes, estilo recreativa); la cámara se mueve también en vertical
-  const Z = 1.5, VW = W / Z, VH = H / Z, CAMY_MAX = H - VH, RES = window.SPRITE_RES || 1, BK = 0.6;
+  // Z = escala de los dibujos del mundo; ZC = zoom de la cámara (en el cooperativo se aleja para que quepan los dos)
+  const Z = 1.5, RES = window.SPRITE_RES || 1, BK = 0.6;
+  let ZC = Z, VW = W / Z, VH = H / Z, CAMY_MAX = H - VH;
+  function setZoom(z) { ZC = z; VW = W / z; VH = H / z; CAMY_MAX = H - VH; }
   const TIME_LIMIT = { facil: 260, normal: 210, dificil: 165 };
   let curZ = 1;
   const rz = v => Math.round(v * curZ) / curZ;
@@ -33,44 +36,65 @@
       Enter: 'start', KeyP: 'start', Escape: 'back', KeyM: 'mute', KeyF: 'full', Backspace: 'back',
     };
     const ACTIONS = ['left', 'right', 'up', 'down', 'jump', 'punch', 'kick', 'throw', 'start', 'back', 'mute', 'full'];
-    const kb = {}, cur = {}, prev = {}, virt = {};
-    let padMsg = '', padMsgT = 0, usingPad = false;
-    addEventListener('keydown', e => { const a = KEYS[e.code]; if (a) { kb[a] = true; e.preventDefault(); } usingPad = false; Sound.init(); });
-    addEventListener('keyup', e => { const a = KEYS[e.code]; if (a) { kb[a] = false; e.preventDefault(); } });
-    addEventListener('blur', () => { for (const k in kb) kb[k] = false; });
+    // kb[0]: teclado (y mando 1 de la tele); kb[1]: mando 2 de la tele (la app de Android marca sus teclas con pad = 1)
+    const kb = [{}, {}], virt = {}, virt2 = {};
+    let cur = {}, prev = {}, pc = [{}, {}], pp = [{}, {}], loc = {}, locPrev = {};
+    let padMsg = '', padMsgT = 0, usingPad = false, nPads = 0;
+    const slot = e => e.pad === 1 ? 1 : 0;
+    addEventListener('keydown', e => { const a = KEYS[e.code]; if (a) { kb[slot(e)][a] = true; e.preventDefault(); } if (e.pad === 1) nPads = Math.max(nPads, 2); usingPad = false; Sound.init(); });
+    addEventListener('keyup', e => { const a = KEYS[e.code]; if (a) { kb[slot(e)][a] = false; e.preventDefault(); } });
+    addEventListener('blur', () => { for (const k of kb) for (const a in k) k[a] = false; });
     let clicks = 0;
     addEventListener('pointerdown', e => { Sound.init(); if (e.target && e.target.tagName === 'INPUT') return; clicks++; try { document.getElementById('game').focus(); } catch (e) {} });
     addEventListener('gamepadconnected', () => { padMsg = 'MANDO CONECTADO'; padMsgT = 180; });
     addEventListener('gamepaddisconnected', () => { padMsg = 'MANDO DESCONECTADO'; padMsgT = 180; });
-    function poll() {
-      for (const a of ACTIONS) { prev[a] = cur[a]; cur[a] = !!kb[a] || !!virt[a] || !!(window.TOUCH && window.TOUCH[a]); }
-      cur.click = clicks > 0; clicks = 0;
-      let pads = [];
-      try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) { pads = []; }
-      for (const p of pads) {
-        if (!p || !p.connected) continue;
-        const b = i => p.buttons[i] && p.buttons[i].pressed, ax = p.axes || [];
-        const any = p.buttons.some(x => x.pressed) || Math.abs(ax[0] || 0) > 0.5 || Math.abs(ax[1] || 0) > 0.5;
-        if (any) { usingPad = true; Sound.init(); }
-        if (b(14) || ax[0] < -0.4) cur.left = true;
-        if (b(15) || ax[0] > 0.4) cur.right = true;
-        if (b(12) || ax[1] < -0.6) cur.up = true;
-        if (b(13) || ax[1] > 0.6) cur.down = true;
-        if (b(0)) cur.jump = true;
-        if (b(2) || b(4)) cur.punch = true;
-        if (b(1)) cur.kick = true;
-        if (b(3) || b(5) || b(7) || b(6)) cur.throw = true;
-        if (b(9)) cur.start = true;
-        if (b(8)) cur.back = true;
-      }
-      if (padMsgT > 0) padMsgT--;
+    function padRec(p) {
+      const o = {}, b = i => p.buttons[i] && p.buttons[i].pressed, ax = p.axes || [];
+      const any = p.buttons.some(x => x.pressed) || Math.abs(ax[0] || 0) > 0.5 || Math.abs(ax[1] || 0) > 0.5;
+      if (any) { usingPad = true; Sound.init(); }
+      if (b(14) || ax[0] < -0.4) o.left = true;
+      if (b(15) || ax[0] > 0.4) o.right = true;
+      if (b(12) || ax[1] < -0.6) o.up = true;
+      if (b(13) || ax[1] > 0.6) o.down = true;
+      if (b(0)) o.jump = true;
+      if (b(2) || b(4)) o.punch = true;
+      if (b(1)) o.kick = true;
+      if (b(3) || b(5) || b(7) || b(6)) o.throw = true;
+      if (b(9)) o.start = true;
+      if (b(8)) o.back = true;
+      return o;
     }
+    const or = (...rs) => { const o = {}; for (const r of rs) if (r) for (const k in r) if (r[k]) o[k] = true; return o; };
+    // lo que se pulsa en este dispositivo: todo junto y repartido entre dos jugadores (misma pantalla).
+    // Con dos mandos o más, el 1º es del jugador 1 y el 2º del jugador 2; con uno solo, el mando es del
+    // jugador 2 y el jugador 1 usa el teclado o la pantalla táctil.
+    function sample() {
+      const base = {}, two = {};
+      for (const a of ACTIONS) { base[a] = !!kb[0][a] || !!virt[a] || !!(window.TOUCH && window.TOUCH[a]); two[a] = !!kb[1][a] || !!virt2[a]; }
+      base.click = clicks > 0; clicks = 0;
+      let raw = [];
+      try { raw = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) { raw = []; }
+      const pads = [];
+      for (const p of raw) if (p && p.connected) pads.push(padRec(p));
+      nPads = Math.max(pads.length, nPads === 2 && !pads.length ? 2 : 0);
+      if (padMsgT > 0) padMsgT--;
+      const pb = pads.length >= 2;
+      return { all: or(base, two, ...pads), p: [or(base, pb ? pads[0] : null), or(two, ...(pb ? pads.slice(1) : pads))] };
+    }
+    function apply(recs) { prev = cur; cur = or(...recs); pp = pc; pc = [recs[0] || {}, recs[1] || {}]; }
+    // una lectura de este dispositivo; split = cada jugador con lo suyo (dos en la misma pantalla)
+    function local() { const s = sample(); locPrev = loc; loc = s.all; return s; }
+    function poll(split) { const s = local(); apply(split ? s.p : [s.all]); }
     const held = a => !!cur[a], pressed = a => !!cur[a] && !prev[a];
+    const pl = [0, 1].map(i => ({ held: a => !!pc[i][a], pressed: a => !!pc[i][a] && !pp[i][a] }));
+    const ALL = Object.fromEntries(ACTIONS.concat('click').map(a => [a, true]));
     return {
-      poll, held, pressed, get padMsg() { return padMsgT > 0 ? padMsg : ''; }, get pad() { return usingPad || !!window.TV_PAD; },
+      poll, local, apply, held, pressed, pl, ACTIONS, get padMsg() { return padMsgT > 0 ? padMsg : ''; }, get pad() { return usingPad || !!window.TV_PAD; },
+      get pads() { return nPads; },
+      localP: a => !!loc[a] && !locPrev[a],
       confirm: () => pressed('jump') || pressed('punch') || pressed('start') || !!cur.click,
       backP: () => pressed('kick') || pressed('back'),
-      clear() { for (const a of ACTIONS) prev[a] = cur[a] = true; }, virt,
+      clear() { prev = cur = { ...ALL }; pp = pc = [{ ...ALL }, { ...ALL }]; }, virt, virt2,
     };
   })();
 
@@ -107,6 +131,10 @@
     atlas.normal = make(null);
     atlas.white = make(() => [255, 255, 255]);
     atlas.red = make((r, g, b) => [Math.min(255, r * 0.6 + 120), g * 0.55, b * 0.5]);
+    atlas.alt = make((r, g, b) => {
+      if ((r > g && g > b && g > r * 0.52) || Math.max(r, g, b) - Math.min(r, g, b) < 28) return [r, g, b];
+      return [b * 0.9 + 20, r * 0.75 + 10, g * 0.9 + 60].map(v => Math.min(255, v));
+    });
     atlas.fire = make((r, g, b) => { const l = (r + g + b) / 3; return [Math.min(255, r * 0.7 + l * 0.5 + 50), Math.min(255, g * 0.5 + l * 0.25), b * 0.3]; });
     for (let k = 0; k < 6; k++) {
       const a = k * 60 * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
@@ -119,7 +147,7 @@
   }
   function drawChar(who, idx, cx, feetY, face, scale = 1, variant = null) {
     const f = SPRITE_FRAMES[who][idx], k = scale / RES;
-    const src = variant === 'white' ? atlas.white : variant === 'fire' ? atlas.fire : typeof variant === 'number' ? atlas.rainbow[variant % 6] : atlas.normal;
+    const src = variant === 'white' ? atlas.white : variant === 'fire' ? atlas.fire : variant === 'alt' ? atlas.alt : typeof variant === 'number' ? atlas.rainbow[variant % 6] : atlas.normal;
     const w = f[2] * k, h = f[3] * k, ox = f[4] * k;
     const x = face > 0 ? rz(cx + ox) : rz(cx - ox - w), y = rz(feetY - h);
     const eff = k * curZ;
@@ -221,7 +249,7 @@
     const special = mamaLines(why), pool = special.length && Math.random() < 0.6 ? special : MAMA_LINES;
     let line; do line = pick(pool); while (pool.length > 1 && line[1] === G.mamaLast);
     G.mamaSeen = true; G.mamaLast = line[1];
-    const name = NAMES[G.hero][0] + NAMES[G.hero].slice(1).toLowerCase(), o = G.hero === 'boy' ? 'o' : 'a';
+    const hero = (P && P.hero) || G.hero, name = NAMES[hero][0] + NAMES[hero].slice(1).toLowerCase(), o = hero === 'boy' ? 'o' : 'a';
     const text = line[1].replace(/\{H\}/g, name).replace(/\{o\}/g, o);
     L.mama = { pose: line[0], text, t: 0, dur: why === 'dead' ? 148 : 120 + text.length * 3 }; // al morir, antes de la pantalla de vidas
     Sound.sfx.mama();
@@ -297,6 +325,37 @@
   };
   try { G.hi = +localStorage.getItem('suelta-gato-hi') || 0; } catch (e) {}
   let L = null, P = null, D = DIFFICULTY.normal, uid = 0, S = null;
+  // Cooperativo: PL = los dos jugadores (null en partidas de uno); CO = datos de la partida a dos.
+  // P es siempre el jugador que se está moviendo o dibujando, y PI su mando; fuera de esos bucles P es el jugador 1.
+  let PL = null, PI = Input, CO = null, NL = { on: false };
+  const ZMIN = 1.0, MAXSEP = W / ZMIN - 130;
+  const players = () => PL || (P ? [P] : []);
+  const alive = () => players().filter(p => !p.dead);
+  const plIn = p => PL ? Input.pl[p.idx] : Input;
+  function withPl(p, fn) { const k = P, ki = PI; P = p; PI = plIn(p); try { return fn(); } finally { P = k; PI = ki; } }
+  function eachPl(fn) { for (const p of players()) withPl(p, () => fn(p)); }
+  // a quién persiguen los bichos: al jugador vivo más cercano
+  function nearestPl(x, y) {
+    let b = null, bd = Infinity;
+    for (const p of players()) { const d = Math.abs(p.x + p.w / 2 - x) + Math.abs(p.y + p.h / 2 - y) + (p.dead ? 1e7 : 0); if (d < bd) { bd = d; b = p; } }
+    return b || P;
+  }
+  // el que va más adelantado (el que abre puertas, activa jefes y llega a la meta)
+  const leader = () => { let b = null; for (const p of alive()) if (!b || p.x > b.x) b = p; return b || P; };
+  // trae a los compañeros junto a p (al entrar en una arena, una tubería o la meta), reviviéndolos si hace falta
+  function gatherTo(p, dx = 30) {
+    for (const q of players()) {
+      if (q === p || q.gone) continue;
+      if (q.dead) reviveAt(q, p);
+      q.x = p.x + dx; q.y = p.y + p.h - q.h - 2; q.vx = 0; q.vy = 0; q.ride = null; q.pipe = null; q.clip = null; q.fling = null;
+      parts(q.x + q.w / 2, q.y + q.h / 2, 10, ['#ffffff', '#ffe066', '#8affff'], { sp: 2, up: 2 });
+    }
+  }
+  function reviveAt(q, p) {
+    q.dead = false; q.deadT = 0; q.hearts = D.hearts; q.inv = 150; q.hurtT = 0; q.act = null; q.starT = 0; q.bubbleT = 90;
+    if (q.power !== 'none') withPl(q, () => setPower('none'));
+    q.x = p.x - 20 * p.face; q.y = Math.max(20, p.y - 70); q.vx = 0; q.vy = 0; q.ride = null; q.pipe = null; q.clip = null; q.fling = null; q.launch = false; q.fl = null; q.head = -1;
+  }
   const rand = (a, b) => a + Math.random() * (b - a), pick = a => a[Math.floor(Math.random() * a.length)];
   const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
@@ -306,6 +365,7 @@
     if (c < 0 || c >= L.cols) return BLOCK;
     if (L.arenaLocked && (c === L.arenaStart || c === L.arenaStart + 18)) return BLOCK;
     if (L.miniFight === 'on' && (c === L.miniCol || c === L.miniCol + MINI_W - 1)) return BLOCK;
+    if (L.gate && !L.gate.open && c === L.miniCol) return BLOCK; // cooperativo: reja de los dos botones
     return L.tiles[r][c];
   }
   const solidAt = (c, r) => isSolidTile(tileAt(c, r));
@@ -370,11 +430,14 @@
     ctx.drawImage(ph, -Math.round(maxX * Math.max(0, Math.min(1, fx))), -Math.round(maxY * Math.max(0, Math.min(1, fy))));
   }
 
-  function newPlayer() {
-    return { x: 2 * T, y: 0, w: 20, h: 52, vx: 0, vy: 0, face: 1, onGround: false, coyote: 0, jumpBuf: 0, act: null, actT: 0, hitSet: null,
+  function newPlayer(idx = 0) {
+    return { pl: true, idx, hero: CO ? CO.heroes[idx] : G.hero, x: 2 * T, y: 0, w: 20, h: 52, vx: 0, vy: 0, face: 1, onGround: false, coyote: 0, jumpBuf: 0, act: null, actT: 0, hitSet: null,
       hurtT: 0, inv: 0, hearts: D.hearts, power: 'none', starT: 0, weapon: null, ammo: 0, dead: false, deadT: 0, anim: 0, combo: 0, idleT: 0, auto: null,
-      shield: 0, cocido: false, airJumped: false, fastT: 0, ride: null, pipe: null, clip: null, fling: null };
+      shield: 0, cocido: false, airJumped: false, fastT: 0, ride: null, pipe: null, clip: null, fling: null, head: -1, fl: null };
   }
+  // cooperativo: estadísticas de cada uno en el nivel (para el resumen del final)
+  const DUO_STATS = ['coins', 'kills', 'letters', 'rescues', 'aupas', 'hits', 'deaths'];
+  function stat(k, idx = P && P.idx) { if (L && L.st && L.st[idx]) L.st[idx][k]++; }
   // Agacharse: la caja de colisión se encoge desde arriba (los pies no se mueven)
   function canStand() {
     const top = P.y + P.h - P.fullH, l = Math.floor(P.x / T), r = Math.floor((P.x + P.w - 1) / T);
@@ -393,7 +456,7 @@
     const big = p === 'big' || p === 'fire';
     P.w = big ? 24 : 20; P.h = big ? 64 : 52; P.y += oldH - P.h;
   }
-  const pScale = () => (P.power === 'big' || P.power === 'fire') ? 1.25 : 1;
+  const pScale = (p = P) => (p.power === 'big' || p.power === 'fire') ? 1.25 : 1;
   function groundYAt(col) { for (let r = 2; r < ROWS; r++) if (isSolidTile(L.tiles[r][col])) return r * T; return 12 * T; }
   // Fila del suelo real de una columna. -1 si es un pozo (no hay donde apoyar un sprite).
   function surfaceRow(col) {
@@ -441,16 +504,18 @@
     const loc = LOCATIONS[idx], isFinal = idx === LOCATIONS.length - 1;
     // en la carrera los dos generan el mismo nivel a partir de la semilla común
     const seed = R ? (R.seed + idx * 7919) >>> 0 : (Math.random() * 1e9) | 0;
-    const data = Level.generate(idx, G.diff, seed, isFinal);
+    const data = Level.generate(idx, G.diff, seed, isFinal, !!CO);
     L = Object.assign(data, assetsFor(idx), { loc, enemies: [], items: [], projs: [], parts: [], fx: [], props: [], texts: [], bubbles: [], camX: 0, camY: CAMY_MAX, timeLeft: TIME_LIMIT[G.diff] * 60, shake: 0,
       time: 0, kills: 0, coinsGot: 0, checkpointHit: false, bumps: [], boss: null, arenaLocked: false, multi: {}, snow: [], cs: null, catTauntT: 0 });
     data.coins.forEach(k => L.items.push(makeItem('peseta', k.col * T + 4, k.row * T + 4, true)));
     data.spawns.forEach(s => L.enemies.push(makeEnemy(s.kind, s.col, s.row)));
     (data.letters || []).forEach(k => { const it = makeItem('letra' + k.i, k.col * T + 2, k.row * T + 2, true); it.letter = k.i; L.items.push(it); });
     L.objs = makeObjs(data.objs); L.botijo = {}; L.got = LETTERS.map(() => false);
+    L.gate = data.plates ? { open: false, t: 0 } : null;
+    L.st = CO ? [0, 1].map(() => Object.fromEntries(DUO_STATS.map(k => [k, 0]))) : null; L.combos = 0;
     if (loc.snow) for (let i = 0; i < 110; i++) L.snow.push({ x: rand(0, W), y: rand(0, H), s: rand(0.4, 1.4), p: rand(0, 6) });
-    P = newPlayer(); P.y = groundYAt(2) - P.h;
-    applyPerks();
+    makePlayers(2 * T, true);
+    setZoom(Z);
     L.props = makeLevelProps(idx);
     L.camX = 0; L.nick = nick();
     L.mini = makeMini(); L.miniFight = null; L.cameo = null; L.freezeT = 0; G.slow = null;
@@ -459,9 +524,15 @@
     const end = L.mini ? L.miniCol : L.goalStart;
     L.cameoAt = [Math.round(end * 0.3), Math.round(end * 0.78)];
   }
+  // crea al jugador (o a los dos) en x; con perks, estrena lo comprado en el chiringuito
+  function makePlayers(x, perks) {
+    const list = CO ? [newPlayer(0), newPlayer(1)] : [newPlayer(0)];
+    PL = CO ? list : null; P = list[0];
+    list.forEach((q, i) => { q.x = x + i * 30; q.y = groundYAt(Math.floor((q.x + q.w / 2) / T)) - q.h; if (CO && CO.gone === i) { q.dead = q.gone = true; q.y = H + 200; } });
+    if (perks) { const k = G.perks || {}; G.perks = {}; list.forEach(q => withPl(q, () => applyPerks(k))); }
+  }
   function respawn() {
     const keepHearts = D.hearts;
-    P = newPlayer(); P.hearts = keepHearts; P.inv = 120;
     let x = L.checkpointHit ? L.checkpointX : 2 * T;
     if (L.boss) { x = (L.arenaStart + 3) * T; L.boss.hp = Math.min(L.boss.maxHp, L.boss.hp + Math.round(L.boss.maxHp * 0.25)); L.boss.x = (L.arenaStart + 14) * T; L.boss.state = 'idle'; L.boss.st = 60; L.boss.vx = 0; }
     if (L.miniFight === 'on') {
@@ -476,7 +547,7 @@
       if (o.kind === 'cae') { o.st = 'idle'; o.y = o.y0; o.off = false; }
       if (o.kind === 'erupcion') o.warn = [];
     });
-    P.x = x; P.y = groundYAt(Math.floor(x / T)) - P.h;
+    makePlayers(x); players().forEach(q => { if (!q.gone) { q.hearts = keepHearts; q.inv = 120; } });
     L.enemies.forEach(e => { if (!e.ty.fly && !e.mini && Math.abs(e.x - x) < 160) e.remove = true; });
     L.projs = [];
     L.camX = Math.max(0, Math.min((L.mainCols || L.cols) * T - VW, x - VW / 3)); L.camY = CAMY_MAX;
@@ -536,14 +607,14 @@
   };
   const FREEZE_T = 360, CAFE_T = 1200;
   function gainPeseta(cx, cy) {
-    G.pesetas++; L.coinsGot++; addScore(10); Sound.sfx.coin();
+    G.pesetas++; L.coinsGot++; addScore(10); Sound.sfx.coin(); stat('coins');
     if (G.pesetas % 100 === 67) { popText(cx, cy - 26, '¡SIX SEVEN!', '#8affff', 16); Sound.sfx.checkpoint(); }
     if (G.pesetas % 50 === 0) { if (P.hearts < D.hearts + 1) P.hearts++; showBanner('corazon', '¡50 PESETAS!', 'Con 50 pesetas te regalan un corazón. ¡Sigue cogiendo monedas!'); Sound.sfx.heal(); }
   }
   // Letras M-A-C-H-Í-N: si juntas las seis en el mismo nivel, vida extra y 5000 puntos
   function collectLetter(it) {
     const cx = it.x + it.w / 2, cy = it.y;
-    L.got[it.letter] = true; addScore(500); Sound.sfx.checkpoint();
+    L.got[it.letter] = true; addScore(500); Sound.sfx.checkpoint(); stat('letters');
     parts(cx, cy + 6, 16, ['#ffd23f', '#ffffff', '#ff8a3a'], { sp: 3, up: 4 });
     const n = L.got.filter(Boolean).length;
     popText(cx, cy - 10, LETTERS[it.letter] + '  ' + n + '/' + LETTERS.length, '#ffe066', 16);
@@ -587,12 +658,12 @@
       case 'cocido': P.cocido = true; addScore(1000); Sound.sfx.power(); break;
       case 'cafe': P.fastT = CAFE_T; addScore(1000); Sound.sfx.power(); break;
     }
-    const info = itemInfo(it.type); if (info) showBanner(it.type, info[0], info[1].replace('{K}', Input.pad ? 'Y (mando)' : TCH() ? 'LANZAR' : 'V o L'));
+    const info = itemInfo(it.type); if (info) showBanner(it.type, info[0], info[1].replace('{K}', NL.on || CO ? 'LANZAR' : Input.pad ? 'Y (mando)' : TCH() ? 'LANZAR' : 'V o L'));
     parts(cx, cy, 16, ['#ffe066', '#ffffff', '#ff8ab0'], { sp: 3, up: 4 });
   }
   function updateItem(it) {
     it.t++;
-    if (it.state === 'static') { if (overlap(it, P) && !P.dead) collectItem(it); return; }
+    if (it.state === 'static') { touchItem(it); return; }
     if (it.state === 'sprout') { it.y -= 1; if (it.t >= it.h + 2) { it.state = 'live'; it.t = 0; if (it.type === 'bocadillo' || it.type === 'tortilla') it.vx = 1.2; if (it.type === 'turron') it.vx = 1.8; if (it.type === 'cafe') it.vx = 1.6; } return; }
     if (it.state === 'coinpop') { it.y += it.vy; it.vy += 0.5; if (it.t > 22) { it.remove = true; popText(it.x, it.y, '+10', '#ffe066'); } return; }
     if (it.vx) {
@@ -602,8 +673,9 @@
       if (it.type === 'turron' && it.onGround) it.vy = -6;
       if (it.y > H + 30) it.remove = true;
     }
-    if (overlap(it, P) && !P.dead) collectItem(it);
+    touchItem(it);
   }
+  function touchItem(it) { for (const q of players()) if (!q.dead && overlap(it, q)) { withPl(q, () => collectItem(it)); return; } }
 
   function bumpBlock(c, r) {
     const t = L.tiles[r][c], k = c + ',' + r;
@@ -614,7 +686,7 @@
       L.bumps.push({ c, r, t: 10 });
       if (ct === 'peseta' || ct === 'multi') {
         const it = makeItem('peseta', c * T + 4, r * T - 20); it.state = 'coinpop'; it.vy = -7; L.items.push(it);
-        G.pesetas++; L.coinsGot++; addScore(10); Sound.sfx.coin();
+        G.pesetas++; L.coinsGot++; addScore(10); Sound.sfx.coin(); stat('coins');
         L.multi[k] = (L.multi[k] || 0) + 1;
         if (ct === 'peseta' || L.multi[k] >= 7) L.tiles[r][c] = USED;
       } else {
@@ -700,7 +772,7 @@
         case 'mov': { const k = 0.5 - 0.5 * Math.cos(o.t * Math.PI * 2 / o.period); o.x = o.x0 + o.ax * k; o.y = o.y0 + o.ay * k; break; }
         case 'cae':
           if (o.appear > 0) o.appear--;
-          if (o.st === 'idle' && P.ride === o) { o.st = 'shake'; o.t = 0; Sound.sfx.bump(); }
+          if (o.st === 'idle' && players().some(q => q.ride === o && !q.dead)) { o.st = 'shake'; o.t = 0; Sound.sfx.bump(); }
           else if (o.st === 'shake' && o.t > 28) { o.st = 'fall'; o.vy = 0; }
           else if (o.st === 'fall') { o.vy = Math.min(o.vy + 0.35, 8); o.y += o.vy; if (o.y > H + 40) { o.st = 'gone'; o.t = 0; o.off = true; } }
           else if (o.st === 'gone' && o.t > 150) { o.st = 'idle'; o.y = o.y0; o.off = false; o.appear = 24; }
@@ -710,7 +782,7 @@
         case 'silla': { const f = (o.ph + o.t / 520) % 1; o.x = o.xs + (o.xe - o.xs) * f; o.y = o.ys + (o.ye - o.ys) * f; break; }
         case 'vagoneta':
           if (o.appear > 0) o.appear--;
-          if (o.st === 'idle') { if (P.ride === o) { o.st = 'go'; o.v = 0.5; Sound.sfx.select(); popText(o.x + o.w / 2, o.y - 44, '¡AGÁRRATE!', '#ffe066'); } }
+          if (o.st === 'idle') { if (players().some(q => q.ride === o && !q.dead)) { o.st = 'go'; o.v = 0.5; Sound.sfx.select(); popText(o.x + o.w / 2, o.y - 44, '¡AGÁRRATE!', '#ffe066'); } }
           else if (o.st === 'go') {
             o.v = Math.min(5.6, o.v + 0.07); o.x = Math.min(o.xe, o.x + o.v);
             if (o.t % 3 === 0) parts(o.x + 10, o.y + o.h, 1, ['#ffd23f', '#ff8a3a'], { sp: 1, up: 1.5, life: 12 });
@@ -718,7 +790,7 @@
           } else if (o.st === 'gone' && o.t > 100) { o.st = 'idle'; o.x = o.xs; o.off = false; o.appear = 24; }
           break;
         case 'flotador': {
-          const ridden = P.ride === o;
+          const ridden = players().some(q => q.ride === o && !q.dead);
           if (o.st === 'glup') { if (o.t > 80) { o.st = 'idle'; o.off = false; } }
           else if (ridden) {
             o.sink = Math.min(24, o.sink + 0.4);
@@ -737,18 +809,6 @@
           if (ph === 160 && near) { popText(o.x + o.w / 2, o.floor - 80, '¡QUE SUBE LA MAREA!', '#8affff'); Sound.sfx.splat(); }
           if (near && (ph === 170 || ph === 205)) Sound.sfx.ola(ph === 170 ? 1 : 0.7);
           if (near && ph === 330) Sound.sfx.ola(0.5);
-          // chorro de gotas al meterse o salir del agua (también en el charco con la marea baja)
-          const surf = Math.min(o.level, o.floor - 1), feet = P.y + P.h, inW = !P.dead && pcx > o.x && pcx < o.x + o.w && feet > surf + 1;
-          if (inW !== !!o.pIn) {
-            if (inW && P.vy > 0.5) tideSplash(pcx, surf, Math.min(1.6, 0.6 + P.vy / 8));
-            else if (!inW && P.vy < -1) tideSplash(pcx, surf, 0.7);
-          }
-          o.pIn = inW;
-          if (!P.dead && pcx > o.x && pcx < o.x + o.w && P.y + P.h > o.level + 10 && P.inv <= 0 && P.starT <= 0) {
-            addFx('agua', pcx, o.level + 6, { scale: 0.8 }); Sound.sfx.splat();
-            hurtPlayer({ x: pcx + P.face * 10, w: 0 });
-            if (!P.dead) { P.vy = -9.5; P.onGround = false; popText(pcx, P.y - 20, '¡GLUGLÚ!', '#8affff'); }
-          }
           break;
         }
         case 'viento': {
@@ -760,14 +820,7 @@
           o.streaks = o.streaks.filter(s => s.x > L.camX - 40);
           break;
         }
-        case 'hoyo':
-          if (!o.done && !P.dead && P.onGround && pcx > o.x + 2 && pcx < o.x + o.w - 2 && Math.abs(P.y + P.h - o.y) < 2) {
-            o.done = true; addScore(2000); Sound.sfx.checkpoint();
-            popText(pcx, P.y - 20, '¡HOYO EN UNO! 2000', '#8aff8a', 16);
-            for (let i = 0; i < 10; i++) { const it = makeItem('peseta', o.x + o.w / 2 - 6 + (i - 4.5) * 5, o.y - 30); it.state = 'coinpop'; it.vy = -6 - i * 0.5; L.items.push(it); gainPeseta(pcx, P.y); }
-            parts(o.x + o.w / 2, o.y - 10, 20, ['#ffffff', '#8aff8a', '#ffe066'], { sp: 3, up: 5 });
-          }
-          break;
+        case 'hoyo': break;
         case 'geiser': {
           const ph = o.t % 230, near = Math.abs(pcx - o.x) < 400;
           o.st = ph < 140 ? 'idle' : ph < 180 ? 'warn' : 'erupt';
@@ -777,11 +830,6 @@
           if (o.st === 'erupt') {
             if (ph === 180 && near) { Sound.sfx.fire(); L.shake = Math.max(L.shake, 4); }
             if (near) parts(o.x + rand(-9, 9), o.y - rand(0, 6 * T), 1, ['#ffffff', '#dfeaff', '#ffb070'], { sp: 0.8, up: 1.5, g: -0.04, life: 22 });
-            const col = { x: o.x - 14, y: o.y - 7 * T, w: 28, h: 7 * T };
-            if (!P.dead && !P.pipe && o.cool <= 0 && overlap(col, P)) {
-              P.vy = -15.5; P.launch = true; P.onGround = false; P.coyote = 0; P.jumpBuf = 0; P.airJumped = false; P.ride = null; o.cool = 30;
-              Sound.sfx.boing(); popText(pcx, P.y - 20, '¡FIUUUU!', '#ffffff');
-            }
           }
           break;
         }
@@ -811,22 +859,55 @@
         }
       }
       o.dx = o.x - px; o.dy = o.y - py;
+    }
+  }
+  // lo que las atracciones le hacen a un jugador (P): marea, hoyo, géiser y plataformas que lo llevan encima
+  function objsTouch() {
+    const pcx = P.x + P.w / 2;
+    for (const o of L.objs) {
+      if (o.kind === 'marea') {
+        // chorro de gotas al meterse o salir del agua (también en el charco con la marea baja)
+        const surf = Math.min(o.level, o.floor - 1), feet = P.y + P.h, inW = !P.dead && pcx > o.x && pcx < o.x + o.w && feet > surf + 1, k = 'pIn' + P.idx;
+        if (inW !== !!o[k]) {
+          if (inW && P.vy > 0.5) tideSplash(pcx, surf, Math.min(1.6, 0.6 + P.vy / 8));
+          else if (!inW && P.vy < -1) tideSplash(pcx, surf, 0.7);
+        }
+        o[k] = inW;
+        if (!P.dead && pcx > o.x && pcx < o.x + o.w && P.y + P.h > o.level + 10 && P.inv <= 0 && P.starT <= 0) {
+          addFx('agua', pcx, o.level + 6, { scale: 0.8 }); Sound.sfx.splat();
+          hurtPlayer({ x: pcx + P.face * 10, w: 0 });
+          if (!P.dead) { P.vy = -9.5; P.onGround = false; popText(pcx, P.y - 20, '¡GLUGLÚ!', '#8affff'); }
+        }
+      } else if (o.kind === 'hoyo') {
+        if (!o.done && !P.dead && P.onGround && pcx > o.x + 2 && pcx < o.x + o.w - 2 && Math.abs(P.y + P.h - o.y) < 2) {
+          o.done = true; addScore(2000); Sound.sfx.checkpoint();
+          popText(pcx, P.y - 20, '¡HOYO EN UNO! 2000', '#8aff8a', 16);
+          for (let i = 0; i < 10; i++) { const it = makeItem('peseta', o.x + o.w / 2 - 6 + (i - 4.5) * 5, o.y - 30); it.state = 'coinpop'; it.vy = -6 - i * 0.5; L.items.push(it); gainPeseta(pcx, P.y); }
+          parts(o.x + o.w / 2, o.y - 10, 20, ['#ffffff', '#8aff8a', '#ffe066'], { sp: 3, up: 5 });
+        }
+      } else if (o.kind === 'geiser' && o.st === 'erupt') {
+        const col = { x: o.x - 14, y: o.y - 7 * T, w: 28, h: 7 * T };
+        if (!P.dead && !P.pipe && (o.cool <= 0 || o.coolBy !== P.idx && o.cool > 26) && overlap(col, P)) {
+          P.vy = -15.5; P.launch = true; P.onGround = false; P.coyote = 0; P.jumpBuf = 0; P.airJumped = false; P.ride = null; o.cool = 30; o.coolBy = P.idx;
+          Sound.sfx.boing(); popText(pcx, P.y - 20, '¡FIUUUU!', '#ffffff');
+        }
+      }
       // lo que va encima se mueve con la plataforma
-      if (o.plat && P.ride === o && !P.dead && Math.abs(o.dx) < 30 && Math.abs(o.dy) < 30) {
+      if (o.plat && P.ride === o && !P.dead && Math.abs(o.dx || 0) < 30 && Math.abs(o.dy || 0) < 30) {
         if (o.dx) { const v = P.vx; P.vx = o.dx; physX(P); P.vx = v; }
-        P.y += o.dy;
+        P.y += o.dy || 0;
       }
     }
   }
   // La vagoneta se estrella contra la barrera: si sigues montado, sales volando (y duele)
   function crashCart(o) {
-    const rider = P.ride === o && !P.dead;
+    const riders = players().filter(q => q.ride === o && !q.dead);
     o.st = 'gone'; o.t = 0; o.off = true; L.shake = 12;
     Sound.sfx.thud(); Sound.sfx.brick();
     addFx('impacto', o.x + o.w, o.y + 6, { bottom: false, scale: 1 });
     parts(o.x + o.w - 6, o.y + 8, 18, ['#d0303a', '#ffd23f', '#6a4a3a', '#ffffff'], { sp: 4, up: 5 });
     popText(o.x + o.w / 2, o.y - 24, '¡CATAPUM!', '#ff6a6a', 16);
-    if (rider) { P.ride = null; hurtPlayer({ x: o.xr + 40, w: 0 }); if (!P.dead) { P.vy = -12; P.launch = true; P.onGround = false; P.fling = { vx: 2.6, t: 14 }; } }
+    riders.forEach(q => withPl(q, () => { P.ride = null; hurtPlayer({ x: o.xr + 40, w: 0 }); if (!P.dead) { P.vy = -12; P.launch = true; P.onGround = false; P.fling = { vx: 2.6, t: 14 }; } }));
   }
   // Aterrizar sobre plataformas, vagones, sillas... o sobre un muelle (que te lanza)
   function landOnObjs(pb) {
@@ -840,7 +921,7 @@
       if (pb > o.y + Math.abs(o.dy || 0) + 2 || P.y + P.h < o.y) continue;
       P.y = o.y - P.h; P.vy = 0; P.onGround = true;
       if (o.kind === 'muelle') {
-        o.squash = 12; P.vy = (Input.held('jump') || Input.held('up')) ? -15 : -13; P.launch = true; P.onGround = false; P.coyote = 0; P.jumpBuf = 0; P.airJumped = false;
+        o.squash = 12; P.vy = (PI.held('jump') || PI.held('up')) ? -15 : -13; P.launch = true; P.onGround = false; P.coyote = 0; P.jumpBuf = 0; P.airJumped = false;
         Sound.sfx.boing(); parts(o.x + o.w / 2, o.y, 8, ['#ffffff', '#e0303a'], { sp: 2, up: 2, life: 16 });
       } else P.ride = o;
       return;
@@ -888,12 +969,14 @@
         const R = L.room; P.pipe = null; P.vx = 0; P.vy = 0;
         P.x = (R.entry + 1) * T - P.w / 2; P.y = 4 * T - P.h; P.clip = { y: 4 * T };
         snapCamera();
+        gatherTo(P, -26);
         if (!L.roomSeen) { L.roomSeen = true; popText(P.x + P.w / 2 + 120, 5 * T, '¡SALA SECRETA!', '#ffe066', 16); Sound.sfx.checkpoint(); }
       } else {
         // sale por la tubería del nivel
         const m = L.pipe; P.x = (m.c + 1) * T - P.w / 2; P.y = m.r * T;
         P.pipe = { phase: 'out', t: 0, clipY: m.r * T };
         snapCamera();
+        for (const q of players()) if (q !== P && !q.gone) { if (q.dead) reviveAt(q, P); q.x = P.x - 30; q.y = m.r * T - q.h - 40; q.vx = q.vy = 0; q.pipe = q.clip = q.ride = null; }
       }
     } else {
       P.y -= 1.4;
@@ -1401,7 +1484,7 @@
   }
   function killEnemy(e, how) {
     if (e.dead) return;
-    e.dead = true; e.deadT = 0; L.kills++;
+    e.dead = true; e.deadT = 0; L.kills++; stat('kills');
     if (e.loot) { const it = makeItem(e.loot.weapon, e.x, e.y - 10); it.state = 'live'; it.ammo = e.loot.ammo; L.items.push(it); popText(e.x + e.w / 2, e.y - 24, '¡RECUPERADO!', '#8aff8a'); }
     if (e.mini) { miniDefeated(e); return; }
     const pts = e.ty.pts * (how === 'stomp' ? Math.min(8, 1 << P.combo) : 1);
@@ -1444,7 +1527,8 @@
     L.miniHintT = 160; // el consejo sale cuando termina de hablar
   }
   function hitMini(e, dmg, fromX, how) {
-    if (e.inv > 0 || L.miniFight !== 'on') return false;
+    if ((e.inv > 0 && !comboReady()) || L.miniFight !== 'on') return false;
+    if (comboHit(e.x + e.w / 2, e.y + e.h / 2)) dmg *= 2;
     e.hp -= dmg; e.flash = 10; e.inv = 22; L.shake = Math.max(L.shake, 6);
     Sound.sfx.hit();
     addFx('impacto', e.x + e.w / 2, e.y + e.h / 2, { bottom: false, scale: 0.9, face: fromX < e.x ? 1 : -1 });
@@ -1821,12 +1905,12 @@
     const cx = P.x + P.w / 2, y = P.y + 14 * pScale();
     if (P.power === 'fire') {
       if (L.projs.filter(p => p.kind === 'fuego').length >= 3) return false;
-      L.projs.push({ kind: 'fuego', owner: 'p', x: cx + P.face * 10 - 6, y, w: 12, h: 12, vx: P.face * 5, vy: 1, g: 0.35, t: 0, dmg: 1, bounce: true });
+      L.projs.push({ kind: 'fuego', owner: 'p', pl: P.idx, x: cx + P.face * 10 - 6, y, w: 12, h: 12, vx: P.face * 5, vy: 1, g: 0.35, t: 0, dmg: 1, bounce: true });
       Sound.sfx.fire(); return true;
     }
     if (P.weapon === 'chancla' && P.ammo > 0) {
       P.ammo--; if (!P.ammo) { P.weapon = null; popText(cx, P.y - 20, canario() ? '¡SIN CHOLAS!' : '¡SIN CHANCLAS!', '#ffffff'); }
-      L.projs.push({ kind: 'chancla', owner: 'p', x: cx + P.face * 10 - 12, y, w: 24, h: 14, vx: P.face * 6.5, vy: -2.2, g: 0.12, t: 0, dmg: 2, rot: 0 });
+      L.projs.push({ kind: 'chancla', owner: 'p', pl: P.idx, x: cx + P.face * 10 - 12, y, w: 24, h: 14, vx: P.face * 6.5, vy: -2.2, g: 0.12, t: 0, dmg: 2, rot: 0 });
       Sound.sfx.throw(); return true;
     }
     popText(cx, P.y - 20, '¡NO TENGO NADA QUE LANZAR!', '#ffffff');
@@ -1845,7 +1929,7 @@
       popText(P.x + P.w / 2, P.y - 14, P.shield ? '¡CLONG! Quedan ' + P.shield : '¡CLONG! ¡SIN PAELLA!', '#ffd23f');
       return;
     }
-    L.hits = (L.hits || 0) + 1; // medalla "sin un rasguño"
+    L.hits = (L.hits || 0) + 1; stat('hits'); // medalla "sin un rasguño"
     P.hurtT = 30; P.inv = 100; P.act = null;
     P.vx = (P.x + P.w / 2 < sx ? -1 : 1) * 3; P.vy = -4.5;
     L.shake = 8;
@@ -1859,36 +1943,119 @@
   }
   function killPlayer() {
     if (P.dead) return;
-    L.hits = (L.hits || 0) + 1;
-    P.dead = true; P.deadT = 0; P.vy = -8; P.vx = 0; P.hearts = 0; P.starT = 0;
-    Sound.stop(); Sound.sfx.die();
-    L.bubbles = []; mamaPop('dead');
+    L.hits = (L.hits || 0) + 1; stat('deaths');
+    P.dead = true; P.deadT = 0; P.vy = -8; P.vx = 0; P.hearts = 0; P.starT = 0; P.ride = null;
+    const mate = PL && PL.some(q => q !== P && !q.dead);
+    if (!mate) { Sound.stop(); L.bubbles = []; }
+    Sound.sfx.die(); mamaPop('dead');
+  }
+  // --- cooperativo: aterrizar sobre la cabeza del compañero (desde ahí, el salto es un aúpa)
+  const AUPA_V = 12.5;
+  function landOnMate(pb) {
+    const was = P.head; P.head = -1;
+    if (P.onGround || P.ride || P.vy < 0) return;
+    for (const m of PL) {
+      if (m === P || m.dead || m.gone || m.pipe || m.hidden || m.head === P.idx) continue;
+      if (P.x + P.w <= m.x + 3 || P.x >= m.x + m.w - 3) continue;
+      const fb = P.y + P.h;
+      // venía desde arriba (o ya estaba encima y el otro ha dado un salto)
+      if (fb < m.y || (pb > m.y + 6 && !(was === m.idx && fb - m.y < 16))) continue;
+      P.y = m.y - P.h; P.vy = 0; P.onGround = true; P.head = m.idx;
+      if (was !== m.idx) { m.landT = 5; Sound.sfx.bump(); }
+      return;
+    }
+  }
+  // --- cooperativo: el flotador. El que cae espera flotando (y puede remar) hasta que el otro lo toca.
+  function startFloat(mate) {
+    P.fl = { t: 0 }; P.vx = 0; P.vy = 0; P.act = null; P.crouch = false;
+    P.x = Math.max(L.camX + 8, Math.min(L.camX + VW - P.w - 8, P.x));
+    P.y = Math.max(40, Math.min(H - P.h - 70, P.y));
+    Sound.sfx.boing(); parts(P.x + P.w / 2, P.y + P.h * 0.55, 10, ['#e0303a', '#ffffff', '#bfefff'], { sp: 2, up: 2 });
+    popText(mate.x + mate.w / 2, mate.y - 30, '¡RESCATA A ' + NAMES[P.hero].toUpperCase() + '!', '#8affff');
+    if (!G.floatSeen) { G.floatSeen = true; showBanner('si_flotador', '¡AL FLOTADOR!', 'Quien cae espera en un flotador: el otro tiene que tocarlo para rescatarlo. El del flotador puede remar con las flechas. ¡Si caéis los dos, se pierde una vida!'); }
+  }
+  function updateFloat(mate) {
+    const f = P.fl; f.t++;
+    // la corriente lo acerca poco a poco al compañero; quien está dentro rema con las flechas
+    const dx = mate.x - P.x, dy = mate.y - 40 - P.y;
+    let ax = Math.abs(dx) > 70 ? Math.sign(dx) * 0.03 : 0, ay = Math.abs(dy) > 30 ? Math.sign(dy) * 0.03 : 0;
+    ax += ((PI.held('right') ? 1 : 0) - (PI.held('left') ? 1 : 0)) * 0.14;
+    ay += ((PI.held('down') ? 1 : 0) - (PI.held('up') || PI.held('jump') ? 1 : 0)) * 0.14;
+    P.vx = Math.max(-2.2, Math.min(2.2, (P.vx + ax) * 0.95)); P.vy = Math.max(-2.2, Math.min(2.2, (P.vy + ay) * 0.95));
+    if (Math.abs(P.vx) > 0.2) P.face = Math.sign(P.vx);
+    P.x = Math.max(L.camX + 4, Math.min(L.camX + VW - P.w - 4, P.x + P.vx));
+    P.y = Math.max(30, Math.min(H - P.h - 30, P.y + P.vy + Math.sin(f.t * 0.07) * 0.35));
+    P.anim++;
+    if (f.t > 20 && G.state === 'play' && !mate.pipe && !mate.hidden && overlap(P, mate)) {
+      const x = P.x, y = P.y;
+      reviveAt(P, mate); P.bubbleT = 0; P.x = x; P.y = y; P.vy = -3;
+      stat('rescues', mate.idx);
+      Sound.sfx.heal(); L.shake = Math.max(L.shake, 3);
+      parts(P.x + P.w / 2, P.y + P.h * 0.55, 18, ['#e0303a', '#ffffff', '#8aff8a', '#ffe066'], { sp: 3, up: 3 });
+      popText(P.x + P.w / 2, P.y - 16, pick(['¡RESCATE!', '¡GRACIAS, BRO!', '¡DE VUELTA!', '¡QUÉ APAÑAO!']), '#8aff8a', 16);
+    }
+  }
+  function drawFloatRing(front) {
+    const cx = P.x + P.w / 2, cy = P.y + P.h * 0.58, rx = 17 * pScale(), ry = 6, a0 = front ? 0 : Math.PI, n = 6;
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = '#1b1426'; ctx.lineWidth = 8; ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, a0, a0 + Math.PI); ctx.stroke();
+    ctx.lineWidth = 5.5;
+    for (let i = 0; i < n; i++) { ctx.strokeStyle = i % 2 ? '#ffffff' : '#e0303a'; ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, a0 + i * Math.PI / n, a0 + (i + 1) * Math.PI / n + 0.02); ctx.stroke(); }
+    if (front) { ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.ellipse(cx, cy + 1.5, rx - 3, ry - 2.5, 0, 0.5, 1.3); ctx.stroke(); }
+  }
+  // --- cooperativo: ataque combinado. Si los dos le pegáis al jefe casi a la vez, el segundo golpe hace el doble
+  // (y se salta el ratito de invulnerabilidad que deja el primero).
+  const COMBO_WIN = 30;
+  const comboReady = () => !!(PL && L.comboT && L.comboT.who !== P.idx && L.time - L.comboT.t <= COMBO_WIN);
+  function comboHit(x, y) {
+    if (!PL) return false;
+    if (!comboReady()) { L.comboT = { who: P.idx, t: L.time }; return false; }
+    L.comboT = null; L.combos = (L.combos || 0) + 1;
+    L.shake = 14; Sound.sfx.hit(); Sound.sfx.checkpoint();
+    addFx('ko', x, y + 20, { scale: 1.3 });
+    parts(x, y, 30, ['#ff8ab0', '#8affff', '#ffe066', '#ffffff'], { sp: 5, up: 5 });
+    popText(x, y - 40, '¡DOBLE DAÑO!', '#ff8ab0', 16);
+    startSlowmo(x, y, '¡ATAQUE COMBINADO!', { dur: 70, quick: true });
+    return true;
   }
   function updatePlayer() {
     if (P.dead) {
+      if (P.gone) return;
       P.deadT++;
-      if (P.deadT > 30) { P.vy += 0.4; P.y += P.vy; }
-      if (P.deadT === 150) {
-        G.lives--;
-        if (G.lives <= 0) { G.state = 'gameover'; G.t = 0; Sound.sfx.gameover(); saveHi(); }
-        else { G.state = 'respawn'; G.t = 0; }
+      // cooperativo: mientras el compañero siga en pie, esperas en un flotador a que venga a rescatarte
+      const mate = PL && PL.find(q => q !== P && !q.dead);
+      if (P.fl) {
+        if (mate) { updateFloat(mate); return; }
+        // se han caído los dos: el flotador revienta
+        P.fl = null; P.vy = -3; Sound.sfx.brick(); parts(P.x + P.w / 2, P.y + P.h * 0.55, 16, ['#e0303a', '#ffffff', '#bfefff'], { sp: 3, up: 3 });
       }
+      if (P.deadT > 30 && P.y < H + 200) { P.vy += 0.4; P.y += P.vy; }
+      if (PL) {
+        if (mate) { if (P.deadT >= 40 && G.state === 'play') startFloat(mate); return; }
+        // (solo resta la vida el primero de los dos: el otro ya ve la partida en 'respawn')
+        if (P.deadT < 150 || G.state !== 'play' || !PL.every(q => q.dead && (q.gone || q.deadT >= 150))) return;
+      } else if (P.deadT !== 150) return;
+      G.lives--;
+      if (G.lives <= 0) { G.state = 'gameover'; G.t = 0; Sound.sfx.gameover(); saveHi(); }
+      else { G.state = 'respawn'; G.t = 0; }
       return;
     }
+    if (P.bubbleT > 0) P.bubbleT--;
+    P.prevX = P.x;
     if (P.pipe) { updatePipe(); return; }
     if (P.clip && P.y >= P.clip.y) P.clip = null;
     const auto = P.lock;
-    const hl = auto ? P.auto === -1 : Input.held('left'), hr = auto ? P.auto === 1 : Input.held('right');
+    const hl = auto ? P.auto === -1 : PI.held('left'), hr = auto ? P.auto === 1 : PI.held('right');
     const ice = !!L.loc.slippery, star = P.starT > 0;
     const fast = P.fastT > 0;
-    let maxV = (G.hero === 'boy' ? 3.15 : 3.0) * (star ? 1.15 : 1) * (fast ? 1.45 : 1), jumpV = G.hero === 'boy' ? 9.8 : 10.1;
+    let maxV = (P.hero === 'boy' ? 3.15 : 3.0) * (star ? 1.15 : 1) * (fast ? 1.45 : 1), jumpV = P.hero === 'boy' ? 9.8 : 10.1;
     // zonas especiales: arena del búnker, tobogán y viento de levante
     const pcx = P.x + P.w / 2, bunker = P.onGround && zoneAt('bunker', pcx), slide = zoneAt('tobogan', pcx), wind = zoneAt('viento', pcx);
     if (bunker) { maxV *= 0.55; jumpV *= 0.74; }
     // ABAJO encima de una tubería: se mete dentro
-    if (!auto && Input.held('down') && P.onGround && !P.act && P.hurtT < 18 && tryPipe()) return;
+    if (!auto && PI.held('down') && P.onGround && !P.act && P.hurtT < 18 && tryPipe()) return;
     // agacharse (ABAJO en el suelo): esquiva lo que viene a la altura de la cabeza
-    const wantCrouch = !auto && Input.held('down') && P.onGround && !P.act && P.hurtT < 18;
+    const wantCrouch = !auto && PI.held('down') && P.onGround && !P.act && P.hurtT < 18;
     if (wantCrouch) setCrouch(true);
     else if (P.crouch) setCrouch(false, !P.onGround);
     let ax = (hr ? 1 : 0) - (hl ? 1 : 0);
@@ -1904,9 +2071,16 @@
     if (slide && P.hurtT < 18) { P.vx = 5.2; P.face = 1; if (P.onGround && P.anim % 3 === 0) parts(pcx - 8, P.y + P.h - 2, 2, ['#8ad8ff', '#ffffff'], { sp: 1, up: 1.5, life: 16 }); }
     if (bunker && Math.abs(P.vx) > 0.5 && P.anim % 6 === 0) parts(pcx, P.y + P.h - 2, 1, ['#f0dca0', '#d8b870'], { sp: 0.6, up: 1, life: 14 });
     // salto con buffer y "coyote time"
-    if (!auto && (Input.pressed('jump') || Input.pressed('up'))) P.jumpBuf = 7; else if (P.jumpBuf > 0) P.jumpBuf--;
+    if (!auto && (PI.pressed('jump') || PI.pressed('up'))) P.jumpBuf = 7; else if (P.jumpBuf > 0) P.jumpBuf--;
     if (P.onGround) { P.coyote = 6; P.combo = 0; P.airJumped = false; } else if (P.coyote > 0) P.coyote--;
-    if (P.jumpBuf > 0 && P.coyote > 0 && P.hurtT < 18 && setCrouch(false)) {
+    const base = PL && P.head >= 0 && Math.abs(P.y + P.h - PL[P.head].y) < 12 ? PL[P.head] : null; // cooperativo: de pie sobre la cabeza del compañero
+    if (P.jumpBuf > 0 && P.coyote > 0 && P.hurtT < 18 && base && !base.dead) {
+      // ¡AÚPA! el compañero hace de trampolín
+      P.vy = -AUPA_V; P.launch = true; P.jumpBuf = 0; P.coyote = 0; P.head = -1; base.landT = 10;
+      Sound.sfx.jump(); Sound.sfx.boing(); stat('aupas', base.idx);
+      parts(P.x + P.w / 2, P.y + P.h, 10, ['#ffffff', '#ffe066', '#8affff'], { sp: 2, up: 1, life: 18, g: 0 });
+      popText(P.x + P.w / 2, P.y - 10, '¡AÚPA!', '#ffe066');
+    } else if (P.jumpBuf > 0 && P.coyote > 0 && P.hurtT < 18 && setCrouch(false)) {
       P.vy = -jumpV; P.jumpBuf = 0; P.coyote = 0; Sound.sfx.jump();
       parts(P.x + P.w / 2, P.y + P.h, 5, ['#ffffff', '#e8e0d0'], { sp: 1.2, up: 1, life: 16, g: 0 });
     } else if (P.jumpBuf > 0 && P.cocido && !P.onGround && !P.airJumped && P.vy > -jumpV * 0.6 && P.hurtT < 18) {
@@ -1915,23 +2089,29 @@
       addFx('polvo', P.x + P.w / 2, P.y + P.h + 6, { scale: 0.8 });
       parts(P.x + P.w / 2, P.y + P.h, 10, ['#ffffff', '#f5dcb0', '#e0303a'], { sp: 2, up: 0.5, down: 2, life: 18, g: 0 });
     }
-    const holdJ = Input.held('jump') || Input.held('up');
+    const holdJ = PI.held('jump') || PI.held('up');
     // los lanzamientos (muelle, géiser, vagoneta) suben enteros aunque se suelte el salto
     if (P.launch && P.vy >= 0) P.launch = false;
     P.vy += (P.vy < 0 && !holdJ && !P.launch) ? 1.0 : 0.45;
     if (P.vy > 9.5) P.vy = 9.5;
     // ataques
     if (!auto && !P.act && P.hurtT < 18) {
-      if (Input.pressed('punch')) { P.act = 'punch'; P.actT = 0; P.hitSet = new Set(); Sound.sfx.punch(); }
-      else if (Input.pressed('kick')) { P.act = 'kick'; P.actT = 0; P.hitSet = new Set(); Sound.sfx.kick(); }
-      else if (Input.pressed('throw')) { if (doThrow()) { P.act = 'throw'; P.actT = 0; P.hitSet = new Set(); } }
+      if (PI.pressed('punch')) { P.act = 'punch'; P.actT = 0; P.hitSet = new Set(); Sound.sfx.punch(); }
+      else if (PI.pressed('kick')) { P.act = 'kick'; P.actT = 0; P.hitSet = new Set(); Sound.sfx.kick(); }
+      else if (PI.pressed('throw')) { if (doThrow()) { P.act = 'throw'; P.actT = 0; P.hitSet = new Set(); } }
     }
     if (P.act) { P.actT++; if (P.actT >= ACTS[P.act].len) P.act = null; }
     const wasGround = P.onGround, vyBefore = P.vy, pb = P.y + P.h;
     if (P.fling) { P.vx = P.fling.vx; if (--P.fling.t <= 0) { P.fling = null; P.vx = Math.min(P.vx, 1.2); } } // justo por encima de la barrera y a salvo al otro lado
     if (wind && wind.k > 0.05) { const v = P.vx; P.vx = -wind.k * (1 + 0.25 * D.speed) * (P.onGround ? 0.6 : 1); physX(P); P.vx = v; }
-    physX(P); physY(P);
+    // subido encima del compañero: te lleva con él
+    if (base) { const d = base.x - (base.prevX === undefined ? base.x : base.prevX); if (d) { const v = P.vx; P.vx = d; physX(P); P.vx = v; } }
+    physX(P);
+    // cooperativo: no os podéis separar más de lo que cabe en la pantalla
+    if (PL && !auto) { const o = PL.find(q => q !== P && !q.dead && !q.pipe); if (o && Math.abs(P.x - o.x) > MAXSEP) { P.x = o.x + Math.sign(P.x - o.x) * MAXSEP; P.vx = 0; } }
+    physY(P);
     landOnObjs(pb);
+    if (PL) landOnMate(pb);
     // pista: la primera vez que pisas una tubería
     if (P.onGround && !auto) { const pu = pipeUnder(); if (pu && !L['hint_' + pu.to]) { L['hint_' + pu.to] = true; popText(pcx, P.y - 24, pu.to === 'room' ? '¡PULSA ABAJO PARA ENTRAR!' : '¡ABAJO PARA SALIR!', '#8aff8a'); } }
     if (P.onGround && !wasGround && vyBefore > 5) { parts(P.x + P.w / 2, P.y + P.h, 6, ['#ffffff', '#e8e0d0'], { sp: 1.5, up: 1, life: 14, g: 0 }); addFx(ice ? 'hielo' : 'polvo', P.x + P.w / 2, P.y + P.h, { scale: 0.75 }); }
@@ -2000,7 +2180,7 @@
           e.hp -= dmg; e.flash = 8;
           if (e.hp <= 0) killEnemy(e, 'stomp'); else { popText(e.x + e.w / 2, e.y - 8, '¡UFF!', '#ffffff'); if (e.kind === 'pato') { e.angry = true; popText(e.x + e.w / 2, e.y - 20, '¡CUAC! ¡ME ENFADO!', '#ff6a6a'); } }
         }
-        P.vy = (Input.held('jump') || Input.held('up')) ? -9.5 : -6; P.y = e.y - P.h - 1;
+        P.vy = (PI.held('jump') || PI.held('up')) ? -9.5 : -6; P.y = e.y - P.h - 1;
         Sound.sfx.stomp();
       } else if (fromAbove && !stompable) {
         hurtPlayer(e); P.vy = -7; popText(e.x + e.w / 2, e.y - 10, '¡QUE PINCHA!', '#ffffff');
@@ -2021,14 +2201,29 @@
     return IDLE[Math.floor(P.anim / 12) % 4];
   }
   function drawPlayer() {
+    if (P.fl) {
+      // en el flotador: medio cuerpo dentro del aro
+      const v = PL && P.idx === 1 && PL[0].hero === P.hero ? 'alt' : null;
+      drawFloatRing(false);
+      drawChar(P.hero || G.hero, IDLE[Math.floor(P.anim / 12) % 4], P.x + P.w / 2, P.y + P.h, P.face, pScale(), v);
+      drawFloatRing(true);
+      return;
+    }
     if (P.inv > 0 && !P.dead && Math.floor(P.inv / 3) % 2 === 0 && P.starT <= 0) return;
     const f = P.lastF = playerFrame(), s = pScale();
     let feet = P.y + P.h;
-    const variant = P.starT > 0 ? Math.floor(P.anim / 3) : (P.power === 'fire' ? 'fire' : null);
+    // si los dos llevan el mismo personaje, el jugador 2 va con la ropa de otro color
+    const variant = P.starT > 0 ? Math.floor(P.anim / 3) : P.power === 'fire' ? 'fire' : PL && P.idx === 1 && PL[0].hero === P.hero ? 'alt' : null;
     // recortado mientras entra o sale de una tubería
     const clipY = P.pipe ? P.pipe.clipY : P.clip ? P.clip.y : null;
     if (clipY !== null) { ctx.save(); ctx.beginPath(); ctx.rect(P.x - 80, P.pipe ? clipY - 300 : clipY, P.w + 160, 300); ctx.clip(); }
-    const r = drawChar(G.hero, f, P.x + P.w / 2, feet, P.face, s, variant);
+    const r = drawChar(P.hero || G.hero, f, P.x + P.w / 2, feet, P.face, s, variant);
+    // al volver junto al compañero llega dentro de una burbuja
+    if (P.bubbleT > 0) {
+      ctx.save(); ctx.globalAlpha = Math.min(1, P.bubbleT / 30) * 0.8;
+      ctx.strokeStyle = '#bfefff'; ctx.lineWidth = 2; ctx.fillStyle = 'rgba(160,220,255,0.18)';
+      ctx.beginPath(); ctx.arc(P.x + P.w / 2, P.y + P.h / 2, P.h * 0.72, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
+    }
     if (clipY !== null) ctx.restore();
     // escudo de paella: las paelleras que quedan giran alrededor
     if (P.shield > 0) {
@@ -2086,9 +2281,16 @@
     if (p.y > H + 40 || p.x < L.camX - 100 || p.x > L.camX + VW + 100) p.remove = true;
     if (p.remove) return;
     if (p.owner === 'p') {
-      for (const e of L.enemies) if (!e.dead && e.active && overlap(p, e)) { if (damageEnemy(e, p.dmg, p.x, 'hit')) { p.remove = true; break; } }
-      if (!p.remove && L.boss && overlap(p, L.boss.hit())) { hitBoss(p.dmg); p.remove = true; }
-    } else if (!P.dead && overlap(p, P)) {
+      // el golpe cuenta para quien lo lanzó (estadísticas y ataque combinado)
+      const hit = () => {
+        for (const e of L.enemies) if (!e.dead && e.active && overlap(p, e)) { if (damageEnemy(e, p.dmg, p.x, 'hit')) { p.remove = true; break; } }
+        if (!p.remove && L.boss && overlap(p, L.boss.hit())) { hitBoss(p.dmg); p.remove = true; }
+      };
+      if (PL && PL[p.pl]) withPl(PL[p.pl], hit); else hit();
+    } else { for (const q of players()) if (!q.dead && overlap(p, q)) { withPl(q, () => projHit(p)); break; } }
+  }
+  function projHit(p) {
+    {
       if (p.kind === 'tinta') {
         p.remove = true; Sound.sfx.splat(); popText(P.x + P.w / 2, P.y - 20, '¡PUAJ! ¡TINTA DE PULPO!', '#8a8aa8');
         L.ink = { t: 0, dur: 240, blobs: Array.from({ length: 7 }, () => ({ x: rand(80, W - 80), y: rand(80, H - 60), r: rand(26, 54) })) };
@@ -2144,7 +2346,8 @@
   }
   function hitBoss(dmg) {
     const B = L.boss;
-    if (!B || B.inv > 0 || B.state === 'defeat' || B.state === 'intro') return;
+    if (!B || (B.inv > 0 && !comboReady()) || B.state === 'defeat' || B.state === 'intro') return;
+    if (comboHit(B.x + B.w / 2, B.y + B.h / 2)) dmg *= 2;
     B.hp -= dmg; B.inv = 26; B.flash = 12; L.shake = 8;
     Sound.sfx.hit(); Sound.sfx.meow(1.4);
     addFx('impacto', B.x + B.w / 2, B.y + 42, { bottom: false, scale: 0.9, face: B.face });
@@ -2239,11 +2442,13 @@
     physX(B); physY(B);
     B.x = Math.max((A + 1) * T, Math.min((A + 18) * T - B.w, B.x));
     // contacto
-    if (!P.dead && B.state !== 'defeat' && B.state !== 'intro' && B.state !== 'hurt' && overlap(P, B.hit())) {
-      if (P.vy > 0 && P.y + P.h - P.vy <= B.y + 16) { P.vy = -10; hitBoss(2); Sound.sfx.stomp(); }
-      else if (P.starT > 0) hitBoss(1);
-      else hurtPlayer(B.hit());
-    }
+    for (const q of players()) withPl(q, () => {
+      if (!P.dead && B.state !== 'defeat' && B.state !== 'intro' && B.state !== 'hurt' && overlap(P, B.hit())) {
+        if (P.vy > 0 && P.y + P.h - P.vy <= B.y + 16) { P.vy = -10; hitBoss(2); Sound.sfx.stomp(); }
+        else if (P.starT > 0) hitBoss(1);
+        else hurtPlayer(B.hit());
+      }
+    });
   }
   function bossFrame(B) {
     const st = B.state;
@@ -2418,12 +2623,30 @@
   function doorFrame(k) { return k < 0.08 ? 1 : k < 0.16 ? 2 : k < 0.24 ? 3 : k < 0.85 ? 4 : 5; }
 
   // ---------------------------------------------------------- CÁMARA Y RENDER DEL MUNDO
+  function coopZoom() {
+    const ps = alive(); if (!ps.length) return;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const q of ps) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x + q.w); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y + q.h); }
+    const zt = Math.max(ZMIN, Math.min(Z, W / (x1 - x0 + 240), H / (y1 - y0 + 170)));
+    if (Math.abs(zt - ZC) < 0.001) return;
+    const cx = L.camX + VW / 2, cy = L.camY + VH / 2;
+    setZoom(ZC + (zt - ZC) * 0.06);
+    L.camX = cx - VW / 2; L.camY = cy - VH / 2;
+  }
   function updateCamera() {
     let tx, ty;
+    if (PL) coopZoom();
     if (L.arenaLocked || L.boss) { tx = L.arenaStart * T + (19 * T - VW) / 2; ty = 88; }
     else if (L.miniFight === 'on') {
       tx = L.miniCol * T + (MINI_W * T - VW) / 2;
       ty = surfaceRow(L.miniCol + 1) * T - VH * 0.8;
+    }
+    else if (PL && !L.cs) {
+      // cooperativo: el centro de los dos (y que se vean los pies del que esté más abajo)
+      const ps = alive().length ? alive() : players().filter(q => !q.gone);
+      let x0 = Infinity, x1 = -Infinity, top = Infinity, gy = -Infinity;
+      for (const q of ps) { x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x + q.w); top = Math.min(top, q.y); if (q.onGround || q.lastGY === undefined) q.lastGY = q.y + q.h; gy = Math.max(gy, q.lastGY); }
+      tx = (x0 + x1) / 2 - VW / 2; ty = Math.min(gy - VH * 0.74, top - 36);
     }
     else {
       tx = L.cs && L.catCol ? (P.x + L.catCol * T + 72) / 2 - VW / 2 + 10 : P.x + P.w / 2 - VW * 0.4 + P.face * 20;
@@ -2435,7 +2658,7 @@
     L.camX = Math.max(lo, Math.min(hi, L.camX));
     L.camY = Math.max(0, Math.min(CAMY_MAX, L.camY));
   }
-  const toScreen = (x, y) => ({ x: (x - L.camX) * Z, y: (y - L.camY) * Z });
+  const toScreen = (x, y) => ({ x: (x - L.camX) * ZC, y: (y - L.camY) * ZC });
   function shadow(cx, footY, w) {
     const c = Math.floor(cx / T); let gy = null;
     for (let r = Math.max(0, Math.floor((footY - 2) / T)); r < ROWS && r <= Math.floor(footY / T) + 7; r++) { const t = tileAt(c, r); if ((isSolidTile(t) || t === PLAT) && r * T >= footY - 2) { gy = r * T; break; } }
@@ -2460,9 +2683,9 @@
   }
   function drawWorld() {
     const cam = L.camX, camY = L.camY, sx = L.shake > 0 ? rand(-L.shake, L.shake) / 2 / Z : 0, sy = L.shake > 0 ? rand(-L.shake, L.shake) / 2 / Z : 0;
-    const vy = (CAMY_MAX - camY) * Z;
+    const vy = (CAMY_MAX - camY) * ZC;
     if (L.photo) drawPhoto(L.photo, Math.min(1, cam / Math.max(1, (L.mainCols || L.cols) * T - VW)), camY / CAMY_MAX);
-    else { ctx.drawImage(L.sky, 0, 0); [0.1, 0.25, 0.5].forEach((p, i) => { const img = L.layers[i], off = -Math.round((cam * Z * p) % Art.BGW), oy = Math.round(vy * (0.12 + i * 0.12)); ctx.drawImage(img, off, oy); ctx.drawImage(img, off + Art.BGW, oy); }); }
+    else { ctx.drawImage(L.sky, 0, 0); [0.1, 0.25, 0.5].forEach((p, i) => { const img = L.layers[i], off = -Math.round((cam * ZC * p) % Art.BGW), oy = Math.round(vy * (0.12 + i * 0.12)); ctx.drawImage(img, off, oy); ctx.drawImage(img, off + Art.BGW, oy); }); }
     if (L.isFinal && L.boss && photos.guarida) {
       if (!LAIR) LAIR = scaledLair(photos.guarida);
       L.lairT = Math.min(1, (L.lairT || 0) + 0.02);
@@ -2472,7 +2695,7 @@
       ctx.restore();
       L.lairTT = (L.lairTT || 0) + 1; if (L.lairTT < 150) { const a = Math.min(1, L.lairTT / 20, (150 - L.lairTT) / 20); txt('LA GUARIDA DE MACHÍN', W / 2, 54, { size: 16, align: 'center', col: '#ff6aff', alpha: a }); }
     }
-    ctx.save(); ctx.scale(Z, Z); ctx.translate(-cam + sx, -camY + sy); curZ = Z;
+    ctx.save(); ctx.scale(ZC, ZC); ctx.translate(-cam + sx, -camY + sy); curZ = ZC;
     // peligro del fondo de los fosos
     const hz = L.loc.hazard, t = G.t;
     const strip = { water: 'foso_agua', lava: 'foso_lava', ice: 'foso_hielo' }[hz], sa = strip && elementSprites[strip];
@@ -2495,7 +2718,7 @@
       ctx.restore(); ctx.save();
       drawPhoto(SALA, (cam - L.room.c0 * T) / Math.max(1, (L.room.c1 + 1 - L.room.c0) * T - VW), camY / CAMY_MAX);
       ctx.fillStyle = 'rgba(12,8,24,0.25)'; ctx.fillRect(0, 0, W, H);
-      ctx.scale(Z, Z); ctx.translate(-cam + sx, -camY + sy);
+      ctx.scale(ZC, ZC); ctx.translate(-cam + sx, -camY + sy);
     } else if (L.room && cam + VW > L.room.c0 * T) {
       const x0 = (L.room.c0 + 1) * T, x1 = L.room.c1 * T;
       ctx.fillStyle = '#231a36'; ctx.fillRect(x0, 3 * T, x1 - x0, 9 * T);
@@ -2536,6 +2759,7 @@
       if (gate) { const w = gate.width / Z, h = gate.height / Z, drop = (1 - L.gateMT) * (1 - L.gateMT) * gy; cs.forEach(c => { for (let y = gy - drop; y > 0; y -= h) ctx.drawImage(gate, c * T + T / 2 - w / 2, y - h, w, h); }); }
       else { ctx.fillStyle = 'rgba(255,255,255,0.15)'; cs.forEach(c => ctx.fillRect(c * T, 0, T, gy)); }
     }
+    if (PL) drawCoopBits();
     // bandera de control
     if (L.checkpointX) {
       const fx = L.checkpointX, gy = groundYAt(Math.floor(fx / T));
@@ -2549,7 +2773,7 @@
     // sombras
     L.enemies.forEach(e => { if (e.active && !e.dead && !(e.ty.beh === 'popper' && e.hide > 0.5)) shadow(e.x + e.w / 2, e.y + e.h, e.w * 0.9); });
     if (L.boss && L.boss.state !== 'intro') shadow(L.boss.x + L.boss.w / 2, L.boss.y + L.boss.h, 56);
-    if (!P.dead) shadow(P.x + P.w / 2, P.y + P.h, 26 * pScale());
+    eachPl(() => { if (!P.dead) shadow(P.x + P.w / 2, P.y + P.h, 26 * pScale()); });
     L.items.forEach(it => {
       const bob = it.state === 'static' ? Math.sin((G.t + it.x) * 0.05) * 1.5 : 0;
       const a = elementSprites[it.type], seq = a && a.length === 3 ? [0, 1, 2, 1] : null;
@@ -2563,7 +2787,7 @@
     drawBoss();
     drawCameo();
     drawRival();
-    if (!P.hidden) drawPlayer();
+    eachPl(() => { if (!P.hidden && !P.gone) drawPlayer(); });
     drawObjs(true);
     if (L.cs && L.cs.draw) L.cs.draw();
     L.projs.forEach(drawProj);
@@ -2574,7 +2798,7 @@
       else ctx.fillRect(p.x, p.y, p.s * 0.75, p.s * 0.75);
     });
     ctx.restore(); curZ = 1;
-    drawRivalTag();
+    drawRivalTag(); drawPlTags();
     // velo frío del gazpacho (parpadea cuando está a punto de acabarse)
     if (L.freezeT > 0 && (L.freezeT > 90 || G.t % 20 < 12)) { ctx.fillStyle = 'rgba(150,215,255,0.16)'; ctx.fillRect(0, 0, W, H); }
     // textos y bocadillos en coordenadas de pantalla (nítidos)
@@ -2587,16 +2811,16 @@
       ctx.restore();
     } else if (L.ink) { const a = Math.min(1, (L.ink.dur - L.ink.t) / 40) * 0.92; ctx.save(); ctx.globalAlpha = Math.max(0, a); ctx.fillStyle = '#140c22'; for (const b of L.ink.blobs) { ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); for (let k = 0; k < 5; k++) { ctx.beginPath(); ctx.arc(b.x + Math.cos(k * 1.3) * b.r, b.y + Math.sin(k * 1.3) * b.r, b.r * 0.3, 0, Math.PI * 2); ctx.fill(); } } ctx.restore(); }
     L.bubbles.forEach(b => drawBubble(b));
-    if (L.snow.length && !(L.lairT > 0.5)) { L.snow.forEach(s => { s.y += s.s; s.x += Math.sin((G.t + s.p * 50) * 0.02) * 0.4 - (L.camX - (L.prevCam || L.camX)) * Z * 0.3 * s.s; if (s.y > H) { s.y = -4; s.x = rand(0, W); } s.x = (s.x + W) % W; ctx.fillStyle = s.s > 1 ? '#ffffff' : '#dfeaff'; ctx.fillRect(Math.round(s.x), Math.round(s.y), s.s > 1 ? 3 : 2, s.s > 1 ? 3 : 2); }); }
+    if (L.snow.length && !(L.lairT > 0.5)) { L.snow.forEach(s => { s.y += s.s; s.x += Math.sin((G.t + s.p * 50) * 0.02) * 0.4 - (L.camX - (L.prevCam || L.camX)) * ZC * 0.3 * s.s; if (s.y > H) { s.y = -4; s.x = rand(0, W); } s.x = (s.x + W) % W; ctx.fillStyle = s.s > 1 ? '#ffffff' : '#dfeaff'; ctx.fillRect(Math.round(s.x), Math.round(s.y), s.s > 1 ? 3 : 2, s.s > 1 ? 3 : 2); }); }
     L.prevCam = L.camX;
   }
   function bubbleAnchor(tg) {
-    if (tg === P) return { x: P.x + P.w / 2, y: P.y - 18 * pScale() };
+    if (tg && tg.pl) return { x: tg.x + tg.w / 2, y: tg.y - 18 * pScale(tg) };
     if (L.boss && tg === L.boss) return { x: L.boss.x + L.boss.w / 2, y: L.boss.y - 24 };
     if (tg && tg.anchor) return tg.anchor();
     return { x: 0, y: 0 };
   }
-  function drawBubble(b, z = Z) {
+  function drawBubble(b, z = ZC) {
     const a0 = bubbleAnchor(b.target), a = { x: (a0.x - L.camX) * z, y: (a0.y - (L.camY || 0)) * z };
     const lines = wrap(b.text, 26), w = Math.max(...lines.map(l => l.length)) * 8 + 16, h = lines.length * 11 + 12;
     let x = Math.round(a.x - w / 2), y = Math.round(a.y - h - 10);
@@ -2715,8 +2939,9 @@
     const secs = L ? Math.ceil(L.timeLeft / 60) : 0, hurry = secs <= 30 && G.t % 30 < 15;
     txt('TIME', W / 2, 15, { align: 'center', col: '#c8c8e0' });
     txt(String(secs).padStart(3, '0'), W / 2, 25, { align: 'center', size: 16, col: hurry ? '#ff4a4a' : '#ffe066', sh: '#7a2a10' });
-    // derecha: jefe o nivel
-    if (L && L.boss && L.boss.state !== 'intro' && G.state !== 'ending') {
+    // derecha: jefe o nivel (en el cooperativo, el jugador 2; el jefe baja debajo del marcador)
+    if (PL) drawP2Panel();
+    else if (L && L.boss && L.boss.state !== 'intro' && G.state !== 'ending') {
       const B = L.boss;
       portrait('cat', W - 42, 5, 36, -1);
       txt(CAT_NAME, W - 50, 5, { align: 'right', col: '#ffb060' });
@@ -2748,7 +2973,50 @@
       ctx.restore();
     }
     const pm = Input.padMsg; if (pm) txt(pm, W / 2, 56, { align: 'center', col: '#8affff' });
+    if (PL && L && G.state !== 'ending' && G.state !== 'clear') {
+      const B = L.boss && L.boss.state !== 'intro' ? L.boss : L.miniFight === 'on' ? L.mini : null;
+      if (B) {
+        ctx.fillStyle = 'rgba(10,6,24,0.75)'; ctx.fillRect(W / 2 - 130, H - 30, 260, 27);
+        txt(B === L.boss ? CAT_NAME : B.mini.name, W / 2, H - 27, { align: 'center', col: '#ff6a6a' });
+        lifeBar(W / 2 - 110, H - 16, 220, 9, B.hp / B.maxHp, 1, ['#ff8a5a', '#c01e2e']);
+      }
+    }
     drawRaceBar();
+  }
+
+  function plPower(q) {
+    let label = '';
+    if (q.starT > 0) label = 'TURRÓN ' + Math.ceil(q.starT / 60) + 's';
+    else if (q.weapon === 'chancla') label = (canario() ? 'CHOLA x' : 'CHANCLA x') + q.ammo;
+    else if (q.weapon === 'churro') label = 'CHURRO';
+    if (q.power === 'fire') label = (label ? label + ' + ' : '') + 'MOJO';
+    else if (q.power === 'big') label = (label ? label + ' + ' : '') + 'BOCATA';
+    return label;
+  }
+  function drawP2Panel() {
+    const q = PL[1], x = W - 42;
+    portrait(q.hero, x, 5, 36, -1);
+    txt('2P', x - 8, 5, { align: 'right', col: '#8affff' });
+    txt(NAMES[q.hero], x - 32, 5, { align: 'right', col: '#ffffff' });
+    const maxH = D.hearts + (q.hearts > D.hearts ? 1 : 0);
+    lifeBar(x - 196, 20, 188, 11, q.gone || q.dead ? 0 : q.hearts / maxH, maxH);
+    ctx.fillStyle = '#1b1426'; ctx.fillRect(x - 198, 35, 192, 10);
+    const lb = q.gone ? 'SE HA DESCONECTADO' : q.fl ? '¡EN EL FLOTADOR!' : q.dead ? '¡VUELVE ENSEGUIDA!' : plPower(q);
+    txt(lb || 'PUÑOS', x - 10, 36, { align: 'right', col: lb ? '#ffb060' : '#8a8aa8' });
+    // las pesetas (compartidas) junto al reloj
+    ctx.drawImage(Art.itemSprites.peseta, W / 2 + 34, 27, 10, 10);
+    txt('x' + String(G.pesetas).padStart(3, '0'), W / 2 + 46, 29, { col: '#ffe066' });
+  }
+  // "1P" / "2P" encima de cada uno, para saber quién es quién
+  function drawPlTags() {
+    if (!PL || !L) return;
+    for (const q of PL) {
+      if ((q.dead && !q.fl) || q.gone || q.hidden) continue;
+      const pt = toScreen(q.x + q.w / 2, q.y - 18 * pScale(q)), col = q.idx ? '#8affff' : '#ffe066';
+      if (L.bubbles.some(b => b.target === q)) continue;
+      txt(q.fl ? (q.fl.t % 40 < 26 ? '¡AYUDA!' : '') : (q.idx + 1) + 'P', pt.x, Math.max(50, pt.y - 12), { align: 'center', col });
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(pt.x - 4, Math.max(50, pt.y - 12) + 10); ctx.lineTo(pt.x + 4, Math.max(50, pt.y - 12) + 10); ctx.lineTo(pt.x, Math.max(50, pt.y - 12) + 15); ctx.fill();
+    }
   }
 
   // ---------------------------------------------------------- FLUJO DE PARTIDA
@@ -2868,8 +3136,7 @@
     txt(TCH() ? 'JOYSTICK elegir   SALTO comprar   PATADA seguir' : 'FLECHAS elegir   ESPACIO/A comprar   C/B seguir', W / 2, 344, { align: 'center', col: '#8a8aa8' });
   }
   // lo comprado en el chiringuito se estrena al empezar el nivel
-  function applyPerks() {
-    const k = G.perks || {}; G.perks = {};
+  function applyPerks(k) {
     if (k.corazon) P.hearts = D.hearts + 1;
     if (k.mojo) setPower('fire'); else if (k.bocadillo) setPower('big');
     if (k.churro) P.weapon = 'churro';
@@ -2889,33 +3156,73 @@
     if (Input.pressed('start') || Input.pressed('back')) { G.state = 'pause'; G.menu = 0; Sound.sfx.pause(); Sound.duck(true); return; }
     L.time++; updateMama();
     const frozen = L.freezeT > 0;
-    if (frozen && --L.freezeT === 0) { Sound.sfx.select(); popText(P.x + P.w / 2, P.y - 20, '¡SE DESCONGELAN!', '#9fe8f5'); }
-    if (!P.dead && !L.cs && L.boss?.state !== 'defeat' && !frozen) {
+    const lp = leader();
+    if (frozen && --L.freezeT === 0) { Sound.sfx.select(); popText(lp.x + lp.w / 2, lp.y - 20, '¡SE DESCONGELAN!', '#9fe8f5'); }
+    if (alive().length && !L.cs && L.boss?.state !== 'defeat' && !frozen) {
       L.timeLeft--;
-      if (L.timeLeft === 30 * 60) { Sound.sfx.hurt(); popText(P.x + P.w / 2, P.y - 30, '¡DATE PRISA!', '#ff6a6a'); }
-      if (L.timeLeft <= 0) { L.timeLeft = 0; popText(P.x + P.w / 2, P.y - 30, '¡SE ACABÓ EL TIEMPO!', '#ff6a6a'); killPlayer(); }
+      if (L.timeLeft === 30 * 60) { Sound.sfx.hurt(); popText(lp.x + lp.w / 2, lp.y - 30, '¡DATE PRISA!', '#ff6a6a'); }
+      if (L.timeLeft <= 0) { L.timeLeft = 0; popText(lp.x + lp.w / 2, lp.y - 30, '¡SE ACABÓ EL TIEMPO!', '#ff6a6a'); eachPl(() => killPlayer()); }
     }
-    updateObjs();
-    updatePlayer();
+    withPl(lp, updateObjs);
+    eachPl(objsTouch);
+    eachPl(updatePlayer);
     // el gazpacho congela bichos, sus proyectiles y a Machín de paso (los jefes no se inmutan)
-    L.enemies.forEach(e => { if (!frozen || e.dead || e.mini) updateEnemy(e); });
-    updateBoss();
-    if (!frozen) updateCameo();
+    L.enemies.forEach(e => { if (!frozen || e.dead || e.mini) withPl(nearestPl(e.x + e.w / 2, e.y + e.h / 2), () => updateEnemy(e)); });
+    if (L.boss) withPl(nearestPl(L.boss.x + L.boss.w / 2, L.boss.y + L.boss.h / 2), updateBoss);
+    if (!frozen && L.cameo) withPl(nearestPl(L.cameo.x, L.cameo.y), updateCameo);
     L.items.forEach(updateItem);
     L.projs.forEach(p => { if (!frozen || p.owner === 'p') updateProj(p); });
+    if (PL) updateCoop();
     updateCommon();
+    withPl(leader(), playTriggers);
+  }
+  // --- cooperativo: la reja de los dos botones (antes del mini-jefe) y los avisos
+  const plateOn = pl => players().some(q => !q.dead && !q.gone && q.onGround && Math.abs(q.y + q.h - pl.r * T) < 3 && q.x + q.w > pl.c * T - 2 && q.x < (pl.c + 1) * T + 2);
+  function updateCoop() {
+    const lp = leader(), main = lp.x < (L.mainCols || L.cols) * T, g = L.gate;
+    if (g && !g.open) {
+      let all = true;
+      for (const pl of L.plates) { const on = plateOn(pl); if (on && !pl.on) Sound.sfx.select(); pl.on = on; if (!on) all = false; }
+      if (!L.gateHint && main && lp.x > (L.plates[0].c - 8) * T) { L.gateHint = true; showBanner('bandera', '¡REJA CERRADA!', 'Pisad los dos botones a la vez para abrirla. Al de arriba solo se llega con un aúpa: súbete a la cabeza de tu compañero y salta.'); }
+      // si el otro se ha desconectado, la reja se abre sola
+      if (all || players().filter(q => !q.gone).length < 2) {
+        g.open = true; L.shake = 8; Sound.sfx.thud(); Sound.sfx.checkpoint();
+        popText(L.miniCol * T + T / 2, surfaceRow(L.miniCol) * T - 70, '¡REJA ABIERTA!', '#8aff8a', 16);
+      }
+    } else if (g) g.t = Math.min(1, g.t + 0.025);
+    // la primera azotea: cómo se sube
+    if (!G.aupaSeen && main && L.aupas && L.aupas.some(a => lp.x > (a.c - 10) * T && lp.x < a.c * T)) {
+      G.aupaSeen = true;
+      showBanner('letra0', '¡AÚPA!', 'Esa azotea está muy alta para un salto normal: súbete a la cabeza de tu compañero y salta desde ahí. Arriba hay letras, pesetas... ¡y a veces la entrada a la sala secreta!');
+    }
+  }
+  function drawCoopBits() {
+    for (const pl of L.plates || []) {
+      const x = pl.c * T, y = pl.r * T, on = pl.on || (L.gate && L.gate.open), hh = on ? 2 : 5;
+      ctx.fillStyle = '#1b1426'; ctx.fillRect(x + 1, y - 4, T - 2, 4); ctx.fillRect(x + 3, y - 5 - hh, T - 6, hh + 1);
+      ctx.fillStyle = on ? '#58c84a' : '#e0303a'; ctx.fillRect(x + 4, y - 4 - hh, T - 8, hh);
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(x + 5, y - 4 - hh, T - 12, 1);
+      if (!on && L.gate && !L.gate.open && G.t % 50 < 30) { ctx.fillStyle = '#ffe066'; ctx.fillRect(x + T / 2 - 1, y - 22, 2, 8); ctx.fillRect(x + T / 2 - 4, y - 17, 8, 2); ctx.fillRect(x + T / 2 - 3, y - 15, 6, 2); ctx.fillRect(x + T / 2 - 2, y - 13, 4, 1); }
+    }
+    const g = L.gate; if (!g || g.t >= 1) return;
+    const gate = elem('reja'), gy = surfaceRow(L.miniCol) * T, lift = g.t * g.t * gy;
+    if (gate) { const w = gate.width / Z, h = gate.height / Z; for (let y = gy - lift; y > -h; y -= h) ctx.drawImage(gate, L.miniCol * T + T / 2 - w / 2, y - h, w, h); }
+    else { ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(L.miniCol * T, -lift, T, gy); }
+  }
+  // lo que depende de hasta dónde ha llegado el jugador (P = el más adelantado)
+  function playTriggers() {
     // Machín de paso
     const room = inRoom(); // en la sala secreta no salta nada de lo que depende de la posición
     if (!room && !L.cameo && L.cameoAt.length && !P.dead && P.x > L.cameoAt[0] * T && startCameo(L.cameoAt.length === 1)) L.cameoAt.shift();
     // mini-jefe: al entrar en su arena se cierran las rejas
-    if (!room && L.mini && !L.miniFight && !P.dead && P.x > (L.miniCol + 2) * T) startMiniFight();
+    if (!room && L.mini && !L.miniFight && !P.dead && P.x > (L.miniCol + 2) * T) { startMiniFight(); gatherTo(P); }
     if (L.miniMusicT > 0 && --L.miniMusicT === 0 && P.starT <= 0) Sound.play(currentMusic());
-    if (L.miniHintT > 0 && --L.miniHintT === 0 && L.miniFight === 'on') showBanner('bandera', L.mini.mini.name, L.mini.mini.hint);
+    if (L.miniHintT > 0 && --L.miniHintT === 0 && L.miniFight === 'on') showBanner('bandera', L.mini.mini.name, L.mini.mini.hint + (PL ? ' Si le pegáis los dos casi a la vez: ¡ataque combinado, doble de daño!' : ''));
     // puntos de control y meta
     if (!room && L.checkpointX && !L.checkpointHit && P.x + P.w > L.checkpointX) { L.checkpointHit = true; L.checkpointAnim = 1; Sound.sfx.checkpoint(); popText(L.checkpointX, P.y - 20, '¡PUNTO DE CONTROL!', '#8aff8a'); presenterPop(8); }
     if (!room && !L.isFinal && !P.dead && P.x + P.w > L.goalCol * T) startGoalCutscene();
     if (!room && L.isFinal && !L.boss && !P.dead && P.x > (L.arenaStart + 2) * T) {
-      L.arenaLocked = true; L.boss = makeBoss(); L.timeLeft += 120 * 60; Sound.stop(); Sound.sfx.meow(); presenterPop(13, 220);
+      L.arenaLocked = true; L.boss = makeBoss(); L.timeLeft += 120 * 60; Sound.stop(); Sound.sfx.meow(); presenterPop(13, 220); gatherTo(P);
       bubble(P, fill('¡Suelta a {C} ahora mismo, {M}!', G.C), 120);
     }
     if (!room && !L.isFinal && !L.cs && !P.dead && L.catCol && Math.abs(P.x - L.catCol * T) < 420 && L.catTauntT-- <= 0) {
@@ -3032,7 +3339,8 @@
   function startGoalCutscene() {
     G.state = 'cutscene'; Sound.stop(); Sound.sfx.meow();
     if (R) raceGoal('me');
-    P.act = null; P.auto = 1; P.lock = true; P.inv = 0; P.hurtT = 0;
+    gatherTo(P, -30);
+    for (const q of players()) { q.act = null; q.auto = 1; q.lock = true; q.inv = 0; q.hurtT = 0; }
     const cx = L.catCol * T, gy = 12 * T, next = LOCATIONS[G.levelIdx + 1];
     L.enemies.forEach(e => { if (!e.dead && Math.abs(e.x - P.x) < 700) killEnemy(e, 'hit'); });
     L.cameo = null;
@@ -3062,11 +3370,11 @@
     const cs = L.cs;
     const waiting = dialogueWait();
     if (!waiting) { cs.t++; for (const [at, fn] of cs.script) if (cs.t === at) fn(); }
-    if (P.auto && P.x + P.w / 2 >= (L.goalCol + 2) * T) { P.auto = 0; P.face = 1; }
+    for (const q of players()) if (q.auto && q.x + q.w / 2 >= (L.goalCol + 2) * T - q.idx * 34) { q.auto = 0; q.face = 1; }
     if (cs.phase === 2) { cs.by = Math.min(12 * T - 158, cs.by + 3); }
     if (cs.phase === 3) { const k2 = Math.min(1, (cs.t - 170) / 50), gy = 12 * T; cs.catX = L.catCol * T + (cs.bx - L.catCol * T) * k2; cs.catY = gy + ((cs.by + 146 * BK) - gy) * k2 - Math.sin(k2 * Math.PI) * 80; cs.cageX += (cs.bx - cs.cageX) * 0.08; cs.cageTop += (Math.min(cs.by + 103, 12 * T - 78) - cs.cageTop) * 0.08; }
     if (cs.phase === 4 && !waiting) { cs.by -= 1.1; cs.bx += 0.8; }
-    updatePlayer(); updateCommon();
+    eachPl(updatePlayer); updateCommon();
     L.items.forEach(updateItem);
     L.enemies.forEach(e => { if (e.dead) updateEnemy(e); });
   }
@@ -3078,25 +3386,34 @@
       L.bonusPaid = 0; L.bonusTotal = 0; L.medals = [0, 0, 0];
       Sound.sfx.hurt(); return;
     }
-    L.bonus = { time: Math.floor(L.timeLeft / 60) * 20, hearts: P.hearts * 500, kills: L.kills, coins: L.coinsGot, secs, race: R && raceWinner(G.levelIdx) === 'me' ? RACE_BONUS : 0 };
+    L.bonus = { time: Math.floor(L.timeLeft / 60) * 20, hearts: players().reduce((n, q) => n + (q.gone ? 0 : q.hearts), 0) * 500, kills: L.kills, coins: L.coinsGot, secs, race: R && raceWinner(G.levelIdx) === 'me' ? RACE_BONUS : 0 };
     L.bonusPaid = 0; L.bonusTotal = L.bonus.time + L.bonus.hearts + L.bonus.race;
     awardMedals();
     Sound.sfx.clear();
   }
   function updateClear() {
     G.t++;
+    // cooperativo: después del resumen normal, el del equipo (quién ha hecho qué)
+    if (L.duoT !== undefined) {
+      L.duoT++;
+      if (L.duoT % 12 === 0 && L.duoT <= 12 * DUO_ROWS.length) Sound.sfx.tally();
+      if (L.duoT === 12 * DUO_ROWS.length + 20) Sound.sfx.checkpoint();
+      if ((L.duoT > 60 && Input.confirm()) || L.duoT > 1200) startShop();
+      return;
+    }
     if (G.t > 90 && L.bonusPaid < L.bonusTotal) { const step = Math.min(L.bonusTotal - L.bonusPaid, 100); L.bonusPaid += step; G.score += step; if (G.t % 3 === 0) Sound.sfx.tally(); }
     L.medals.forEach((m, i) => { if (m && G.t === MEDAL_T0 + i * 22) { if (m === 2) Sound.sfx.checkpoint(); else Sound.sfx.coin(); } });
     if ((G.t > 150 && Input.confirm()) || G.t > 900) { G.score += L.bonusTotal - L.bonusPaid; L.bonusPaid = L.bonusTotal; saveHi();
       // sin llegar al final no hay más niveles: se vuelve al título
-      if (L.forfeit && L.isFinal) { G.state = 'title'; G.t = 0; Sound.play('title'); } else startShop(); }
+      if (L.forfeit && L.isFinal) { G.state = 'title'; G.t = 0; Sound.play('title'); } else if (L.st && PL && !PL.some(q => q.gone)) { L.duoT = 0; Sound.sfx.confirm(); } else startShop(); }
   }
 
   // --- final
   function startEnding() {
     Sound.play('ending'); awardMedals();
     if (R) { raceGoal('me'); if (raceWinner(G.levelIdx) === 'me') G.score += RACE_BONUS; }
-    L.projs = []; L.endT = 0; P.act = null; P.vx = 0; P.hurtT = 0; P.inv = 0; P.starT = 0;
+    L.projs = []; L.endT = 0;
+    for (const q of players()) { if (q.dead && !q.gone) reviveAt(q, P); q.act = null; q.vx = 0; q.hurtT = 0; q.inv = 0; q.starT = 0; q.bubbleT = 0; }
     const A = L.arenaStart;
     L.freedX = (A + 16) * T;
   }
@@ -3115,13 +3432,16 @@
     if (e === 180) presenterPop(9, 240);
     if (e > 300 && e % 50 === 0) { parts(P.x + P.w / 2, P.y, 6, ['#ff4a8a', '#ff8ab0'], { sp: 1, up: 3, g: -0.02, life: 50 }); }
     if (e > 700 && Input.confirm()) { saveHi(); G.state = 'title'; G.t = 0; G.menu = 0; Sound.play('title'); }
-    P.vy = Math.min(P.vy + 0.45, 9); physY(P);
-    if (e > 330 && e < 700 && P.onGround && e % 40 === 0) { P.vy = -6; Sound.sfx.jump(); }
+    eachPl(() => {
+      if (P.gone) return;
+      P.vy = Math.min(P.vy + 0.45, 9); physY(P);
+      if (e > 330 && e < 700 && P.onGround && (e + P.idx * 20) % 40 === 0) { P.vy = -6; if (!P.idx) Sound.sfx.jump(); }
+    });
     updateCommon();
   }
   function drawEnding() {
     const gy = 12 * T, e = L.endT;
-    ctx.save(); ctx.scale(Z, Z); ctx.translate(-L.camX, -L.camY); curZ = Z;
+    ctx.save(); ctx.scale(ZC, ZC); ctx.translate(-L.camX, -L.camY); curZ = ZC;
     if (L.freed) {
       const jump = e > 330 && e < 700 ? Math.abs(Math.sin(e * 0.08)) * 18 : 0;
       const walking = L.capX > P.x + P.w / 2 + 51; drawChar(G.captive, walking ? WALK[Math.floor(e / 5) % 8] : e > 300 ? (jump > 2 ? WIN[1] : winFrame(e)) : IDLE[Math.floor(e / 12) % 4], L.capX, gy - jump, -1, 1);
@@ -3203,10 +3523,20 @@
   function updateSelect() {
     G.t++;
     if (Input.pressed('left') || Input.pressed('right')) { G.menu = 1 - G.menu; Sound.sfx.select(); }
-    if (Input.backP()) { if (R) raceQuit(); G.state = 'mode'; G.menu = 0; Sound.sfx.select(); return; }
+    if (Input.backP()) {
+      Sound.sfx.select();
+      if (G.duo && G.duo.step) { G.duo.step = 0; G.menu = G.duo.heroes[0] === 'boy' ? 0 : 1; return; }
+      if (R) raceQuit(); G.state = 'mode'; G.menu = G.duo ? 1 : 0; return;
+    }
     if (Input.confirm()) {
-      G.hero = G.menu === 0 ? 'boy' : 'girl'; Sound.sfx.confirm(); G.t = 0;
-      if (R) Net.send({ t: 'hello', h: G.hero });
+      const who = G.menu === 0 ? 'boy' : 'girl'; Sound.sfx.confirm(); G.t = 0;
+      if (G.duo) {
+        G.duo.heroes[G.duo.step] = who;
+        if (!G.duo.step) { G.duo.step = 1; G.menu = 1 - G.menu; return; }
+        G.hero = G.duo.heroes[0]; G.state = 'difficulty'; G.menu = 1; return;
+      }
+      G.hero = who;
+      if (R) { R.picked = true; Net.send({ t: 'hello', h: G.hero, mode: R.mode, picked: 1 }); }
       // en la carrera, la dificultad la elige quien creó la partida
       if (R && !Net.isHost) { G.state = 'lobby'; G.sub = 'wait'; }
       else { G.state = 'difficulty'; G.menu = 1; }
@@ -3236,17 +3566,21 @@
       txt('Rescata a ' + NAMES[who === 'boy' ? 'girl' : 'boy'], cx, by + bh - 18, { align: 'center', col: '#8aff8a' });
     });
     txt(TCH() ? 'JOYSTICK elegir     TOCA / SALTO confirmar' : 'IZQ/DER elegir     ENTER/A confirmar', W / 2, 340, { align: 'center', col: '#c8c8e0' });
-    if (R) txt('CARRERA CONTRA ' + rivalName() + ' (puede elegir el mismo personaje)', W / 2, 26, { align: 'center', col: '#ff8ab0' });
+    if (R) txt((R.mode === 'coop' ? 'COOPERATIVO CON ' : 'CARRERA CONTRA ') + rivalName() + ' (podéis elegir el mismo personaje)', W / 2, 26, { align: 'center', col: '#ff8ab0' });
+    if (G.duo) txt('JUGADOR ' + (G.duo.step + 1) + ': ELIGE' + (G.duo.step ? ' (si coincidís, llevarás la ropa de otro color)' : ''), W / 2, 26, { align: 'center', col: G.duo.step ? '#8affff' : '#ffe066' });
   }
   function updateDifficulty() {
     G.t++;
     if (Input.pressed('up')) { G.menu = (G.menu + 2) % 3; Sound.sfx.select(); }
     if (Input.pressed('down')) { G.menu = (G.menu + 1) % 3; Sound.sfx.select(); }
-    if (Input.backP()) { G.state = 'select'; G.menu = G.hero === 'boy' ? 0 : 1; Sound.sfx.select(); }
+    if (Input.backP()) { G.state = 'select'; G.menu = G.hero === 'boy' ? 0 : 1; if (G.duo) { G.duo.step = 1; G.menu = G.duo.heroes[1] === 'boy' ? 0 : 1; } Sound.sfx.select(); }
     if (Input.confirm()) {
       G.diff = ['facil', 'normal', 'dificil'][G.menu];
-      if (R) { const m = { t: 'start', diff: G.diff, seed: (Math.random() * 1e9) >>> 0 }; Net.send(m); raceStart(m); return; }
-      Sound.sfx.confirm(); startGame();
+      if (R && R.mode === 'coop' && !R.rivalPicked) { Sound.sfx.bump(); return; } // el otro aún está eligiendo personaje
+      if (R) { const m = { t: 'start', diff: G.diff, seed: (Math.random() * 1e9) >>> 0, mode: R.mode, heroes: [G.hero, R.rivalHero] }; Net.send(m); raceStart(m); return; }
+      Sound.sfx.confirm();
+      if (G.duo) { coopStart(G.duo.heroes, false); G.duo = null; return; }
+      startGame();
     }
   }
   function drawDifficulty() {
@@ -3263,7 +3597,7 @@
       const mc = medalCount(k); if (mc) { drawMedal(460, y + 56, 1, 'letra0', { r: 7, small: true }); txt(mc + '/' + LOCATIONS.length * 3, 472, y + 52, { col: '#ffe066' }); }
       if (sel && G.t % 40 < 28) txt('>', 89, y + 14, { col: '#ffe066' });
     });
-    txt('Tienes 5 vidas en todas las dificultades', W / 2, 322, { align: 'center', col: '#ff8ab0' });
+    txt(R && R.mode === 'coop' && !R.rivalPicked ? 'Esperando a que ' + rivalName() + ' elija personaje...' : 'Tienes 5 vidas en todas las dificultades', W / 2, 322, { align: 'center', col: '#ff8ab0' });
     txt(TCH() ? 'JOYSTICK elegir   TOCA / SALTO empezar   PATADA volver' : 'ARRIBA/ABAJO elegir   ENTER/A empezar   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
   }
 
@@ -3355,6 +3689,235 @@
     txt(TCH() ? 'PATADA: saltar la historia' : 'B / ESC: saltar la historia', W - 10, H - 12, { align: 'right', col: '#8a8aa8' });
   }
 
+  // ---------------------------------------------------------- COOPERATIVO
+  // heroes: personaje de cada jugador; net: por Internet (si no, en la misma pantalla)
+  function coopStart(heroes, net, seed) {
+    CO = { heroes, net, me: net ? (Net.isHost ? 0 : 1) : 0, gone: null };
+    G.hero = heroes[0]; G.duo = null;
+    if (!net) { startGame(); Input.clear(); return; }
+    R = null;
+    // lo que queda de otras partidas no puede influir: los dos arrancan desde el mismo punto
+    G.mamaLast = undefined; G.lettersSeen = G.hiddenSeen = G.botijoSeen = G.aupaSeen = G.floatSeen = undefined; G.slow = null; uid = 0; lastNick = '';
+    NL = { on: true, frame: 0, delay: 5, inF: 5, loc: {}, rem: {}, hist: {}, rs: seed >>> 0, myH: {}, remH: {}, stallT: 0, desync: 0, hashFloor: -1, syncAt: null, snap: null, syncs: 0 };
+    for (let f = 0; f < NL.delay; f++) { NL.loc[f] = {}; NL.rem[f] = {}; }
+    Input.clear();
+    detRun(startGame);
+  }
+  function coopQuit() {
+    if (CO && CO.net) Net.close();
+    CO = null; PL = null; NL = { on: false }; setZoom(Z);
+  }
+  // el otro se ha ido: su personaje desaparece y se sigue jugando solo
+  function coopDrop() {
+    if (!CO) return;
+    NL.on = false; CO.gone = 1 - CO.me;
+    const q = PL && PL[CO.gone];
+    if (q) { q.dead = q.gone = true; q.y = H + 200; q.ride = null; }
+    if (L && P && ['play', 'cutscene', 'pause', 'respawn'].includes(G.state)) { const k = PL ? PL[CO.me] : P; popText(k.x + k.w / 2, k.y - 40, NAMES[CO.heroes[CO.gone]] + ' SE HA DESCONECTADO', '#ff8a8a'); }
+  }
+  function coopMsg(m) {
+    if (!NL.on) return;
+    if (m.t === 'in') { if (m.f >= NL.frame && NL.rem[m.f] === undefined) NL.rem[m.f] = dec(m.b); }
+    else if (m.t === 'hash') { if (m.f > NL.hashFloor) { NL.remH[m.f] = m.h; hashCheck(m.f); } }
+    else if (m.t === 'resync') { if (CO.me === 0) scheduleSync(); }
+    else if (m.t === 'syncat') { if (m.f >= NL.frame) NL.syncAt = m.f; }
+    else if (m.t === 'st') {
+      // la copia llega en trozos: se junta y, con el último, se reconstruye
+      const b = NL.stBuf && NL.stBuf.f === m.f ? NL.stBuf : (NL.stBuf = { f: m.f, parts: [], got: 0 });
+      if (b.parts[m.i] === undefined) { b.parts[m.i] = m.d; b.got++; }
+      if (b.got === m.n) { try { NL.snap = { f: m.f, s: JSON.parse(b.parts.join('')) }; } catch (e) { console.warn('copia dañada', e); Net.send({ t: 'resync' }); } NL.stBuf = null; }
+    }
+  }
+  function coopStatus(st) {
+    if (st === 'connected' && NL.on) {
+      // reconectados: se reenvía lo que el otro pudo perderse
+      for (const f in NL.hist) if (+f >= NL.frame - 60) Net.send({ t: 'in', f: +f, b: NL.hist[f] });
+    } else if (st === 'lost' || st === 'error') coopDrop();
+  }
+  // mando -> número (un bit por acción) para enviarlo
+  const NET_ACTS = ['left', 'right', 'up', 'down', 'jump', 'punch', 'kick', 'throw', 'start', 'back', 'click'];
+  const enc = r => NET_ACTS.reduce((n, a, i) => r[a] ? n | (1 << i) : n, 0);
+  const dec = n => { const r = {}; NET_ACTS.forEach((a, i) => { if (n & (1 << i)) r[a] = true; }); return r; };
+  // un tic de reloj: se lee el mando de aquí, se envía, y se avanza la simulación si ya está lo del otro
+  function netTick() {
+    const sm = Input.local(); localKeys();
+    if (NL.inF < NL.frame + NL.delay) {
+      const b = enc(sm.all); NL.loc[NL.inF] = dec(b); NL.hist[NL.inF] = b;
+      Net.send({ t: 'in', f: NL.inF, b }); NL.inF++;
+    }
+    if (NL.syncAt === NL.frame && !syncPoint()) { if (++NL.stallT % 180 === 0) Net.send({ t: 'resync' }); return; }
+    if (NL.loc[NL.frame] && NL.rem[NL.frame]) { simStep(); NL.stallT = 0; return; }
+    // el otro no llega: a los 10 s se puede seguir sin él
+    if (++NL.stallT > 600 && (Input.localP('kick') || Input.localP('back'))) { Net.close(); coopDrop(); }
+  }
+  function simStep() {
+    const f = NL.frame, a = NL.loc[f], b = NL.rem[f];
+    delete NL.loc[f]; delete NL.rem[f]; delete NL.hist[f - 180];
+    Input.apply(CO.me === 0 ? [a, b] : [b, a]);
+    detRun(() => { if (slowTick()) update(); });
+    NL.frame++;
+    if (NL.on && NL.frame % 60 === 0) { const h = simHash(); NL.myH[NL.frame] = h; Net.send({ t: 'hash', f: NL.frame, h }); hashCheck(NL.frame); }
+  }
+  // comprobación: cada segundo los dos comparan un resumen de la partida
+  function simHash() {
+    let h = 2166136261;
+    const add = v => { const t = typeof v === 'number' ? v.toFixed(3) : String(v); for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619); };
+    add(G.state); add(G.levelIdx); add(G.score); add(G.lives); add(G.pesetas); add(NL.rs);
+    if (L) { add(L.time); add(L.timeLeft); add(L.enemies.length); L.enemies.forEach(e => { add(e.x); add(e.y); add(e.hp); }); add(L.items.length); add(L.projs.length); }
+    for (const q of players()) { add(q.x); add(q.y); add(q.hearts); add(q.dead ? 1 : 0); }
+    return h >>> 0;
+  }
+  function hashCheck(f) {
+    const a = NL.myH[f], b = NL.remH[f];
+    if (a === undefined || b === undefined) return;
+    delete NL.myH[f]; delete NL.remH[f];
+    if (a !== b && !NL.desync) {
+      NL.desync = f; console.warn('cooperativo desincronizado en el fotograma', f, '- se vuelve a sincronizar');
+      if (CO.me === 0) scheduleSync(); else Net.send({ t: 'resync' });
+    }
+  }
+  // --- resincronización: el anfitrión fija un fotograma un poco por delante de los dos
+  function scheduleSync() {
+    if (NL.syncAt !== null && NL.syncAt >= NL.frame) return;
+    NL.syncAt = NL.frame + NL.delay * 2 + 4;
+    Net.send({ t: 'syncat', f: NL.syncAt });
+  }
+  // devuelve true si ya se puede seguir simulando
+  function syncPoint() {
+    if (CO.me === 0) {
+      const txt = JSON.stringify(takeSnap()), CH = 12000, n = Math.ceil(txt.length / CH);
+      for (let i = 0; i < n; i++) Net.send({ t: 'st', f: NL.frame, i, n, d: txt.slice(i * CH, (i + 1) * CH) });
+    }
+    else if (NL.snap && NL.snap.f === NL.frame) { detRun(() => applySnap(NL.snap.s)); NL.snap = null; }
+    else return false;
+    NL.syncAt = null; NL.desync = 0; NL.syncs++; NL.hashFloor = NL.frame; NL.myH = {}; NL.remH = {};
+    return true;
+  }
+  // copia de todo lo que decide la partida (sin dibujos ni funciones; las referencias van como números)
+  const SNAP_SKIP = new Set(['ty', 'hd', 'spr', 'loc', 'target', 'ride', 'hitSet', 'anchor', 'box', 'hit', 'script', 'draw', 'mini', 'lastF']);
+  const ASSET_KEYS = ['tileset', 'photo', 'layers', 'sky'];
+  function plain(v) {
+    if (v === null || typeof v !== 'object') return typeof v === 'function' ? undefined : v;
+    if (v instanceof HTMLCanvasElement || v instanceof HTMLImageElement || v instanceof Set) return undefined;
+    if (Array.isArray(v)) return v.map(x => { const y = plain(x); return y === undefined ? null : y; });
+    const o = {};
+    for (const k in v) { if (SNAP_SKIP.has(k)) continue; const x = plain(v[k]); if (x !== undefined) o[k] = x; }
+    return o;
+  }
+  function bubbleTarget(t) {
+    if (!t) return { a: { x: 0, y: 0 } };
+    if (t.pl) return { pl: t.idx };
+    if (L.boss && t === L.boss) return { boss: 1 };
+    if (L.cameo && t === L.cameo) return { cameo: 1 };
+    if (t.id !== undefined && L.enemies.includes(t)) return { e: t.id };
+    return { a: t.anchor ? t.anchor() : { x: 0, y: 0 } };
+  }
+  function takeSnap() {
+    const g = {};
+    for (const k of Object.keys(G)) { const d = Object.getOwnPropertyDescriptor(G, k); if (d.get || k === 'hi') continue; const x = plain(G[k]); if (x !== undefined) g[k] = x; }
+    const sn = { G: g, S: plain(S), rs: NL.rs, uid, lastNick, zc: ZC, L: null, PL: null };
+    if (L) {
+      const l = {};
+      for (const k in L) {
+        if (ASSET_KEYS.includes(k) || ['enemies', 'items', 'objs', 'bubbles', 'boss', 'cameo', 'cs', 'parts', 'snow'].includes(k) || SNAP_SKIP.has(k)) continue;
+        const x = plain(L[k]); if (x !== undefined) l[k] = x;
+      }
+      l.enemies = L.enemies.map(e => Object.assign(plain(e), e.mini ? { _mini: 1 } : {}));
+      l.items = L.items.map(plain);
+      l.objs = L.objs.map(plain);
+      l.bubbles = L.bubbles.map(b => ({ text: b.text, t: b.t, dur: b.dur, hold: b.hold, tg: bubbleTarget(b.target) }));
+      l.boss = L.boss ? plain(L.boss) : null;
+      l.cameo = L.cameo ? plain(L.cameo) : null;
+      l.cs = L.cs ? plain(L.cs) : null;
+      l.miniId = L.mini ? L.mini.id : null;
+      sn.L = l;
+      sn.PL = players().map(q => Object.assign(plain(q), { _ride: q.ride ? L.objs.indexOf(q.ride) : -1, _hit: q.hitSet ? [...q.hitSet] : null }));
+    }
+    return sn;
+  }
+  function applySnap(sn) {
+    for (const k in sn.G) G[k] = sn.G[k];
+    D = DIFFICULTY[G.diff]; S = sn.S; uid = sn.uid; lastNick = sn.lastNick; setZoom(sn.zc);
+    const l = sn.L;
+    if (!l) { L = null; PL = null; P = null; NL.rs = sn.rs; return; }
+    if (!L || L.locIdx !== l.locIdx || !PL) loadLevel(G.levelIdx);
+    for (const k in l) if (!['enemies', 'items', 'objs', 'bubbles', 'boss', 'cameo', 'cs', 'miniId'].includes(k)) L[k] = l[k];
+    // bichos: se conservan los que ya existen (con sus dibujos) y se crean los que falten
+    const byId = new Map(L.enemies.map(e => [e.id, e]));
+    if (L.mini) byId.set(L.mini.id, L.mini);
+    L.enemies = l.enemies.map(d => {
+      let e = byId.get(d.id);
+      if (!e) {
+        e = makeEnemy(d.kind, 0, 0, d.big || 1);
+        if (d._mini) { const e2 = e; e.mini = MINI_BOSSES[L.locIdx]; e.anchor = () => ({ x: e2.x + e2.w / 2, y: e2.y - 14 }); }
+      }
+      delete d._mini; return Object.assign(e, d);
+    });
+    L.mini = l.miniId !== null ? L.enemies.find(e => e.id === l.miniId) || byId.get(l.miniId) || null : null;
+    if (L.mini && byId.has(l.miniId) && !L.enemies.includes(L.mini)) Object.assign(L.mini, { dead: true });
+    const items = new Map(L.items.map(it => [it.id, it]));
+    L.items = l.items.map(d => Object.assign(items.get(d.id) || makeItem(d.type, d.x, d.y, true), d));
+    l.objs.forEach((d, i) => { if (L.objs[i]) Object.assign(L.objs[i], d); });
+    if (l.boss) { if (!L.boss) L.boss = makeBoss(); Object.assign(L.boss, l.boss); } else L.boss = null;
+    if (l.cameo) {
+      const K = L.cameo || (L.cameo = {});
+      Object.assign(K, l.cameo);
+      K.anchor = () => ({ x: K.x, y: K.y - 100 }); K.box = () => ({ x: K.x - 22, y: K.y - 84, w: 44, h: 84 });
+    } else L.cameo = null;
+    if (l.cs) { if (!L.cs) withPl(PL ? PL[0] : P, startGoalCutscene); Object.assign(L.cs, l.cs); } else L.cs = null;
+    // jugadores
+    if (sn.PL && PL) sn.PL.forEach((d, i) => {
+      const q = PL[i]; if (!q) return;
+      const ride = d._ride, hit = d._hit; delete d._ride; delete d._hit;
+      Object.assign(q, d);
+      q.ride = ride >= 0 ? L.objs[ride] : null; q.hitSet = hit ? new Set(hit) : null;
+    });
+    P = PL ? PL[0] : P;
+    // bocadillos: se reutiliza el ancla de uno igual si ya estaba (así sigue moviéndose con su dueño)
+    const old = L.bubbles;
+    L.bubbles = l.bubbles.map(b => {
+      const tg = b.tg; let target;
+      if (tg.pl !== undefined) target = PL ? PL[tg.pl] : P;
+      else if (tg.boss) target = L.boss;
+      else if (tg.cameo) target = L.cameo;
+      else if (tg.e !== undefined) target = L.enemies.find(e => e.id === tg.e) || { anchor: () => ({ x: 0, y: 0 }) };
+      else { const same = old.find(o => o.text === b.text); target = same ? same.target : { anchor: () => tg.a }; }
+      return { target, text: b.text, t: b.t, dur: b.dur, hold: b.hold };
+    });
+    NL.rs = sn.rs; // al final: lo de arriba ha podido gastar azar
+  }
+  // --- simulación determinista
+  const NATIVE = { random: Math.random, sin: Math.sin, cos: Math.cos, atan2: Math.atan2, hypot: Math.hypot };
+  const TAU = 6.283185307179586, PI_ = 3.141592653589793, HPI = 1.5707963267948966;
+  function dsin(x) {
+    if (!isFinite(x)) return NaN;
+    x -= Math.round(x / TAU) * TAU;
+    if (x > HPI) x = PI_ - x; else if (x < -HPI) x = -PI_ - x;
+    const x2 = x * x;
+    return x * (1 - x2 / 6 * (1 - x2 / 20 * (1 - x2 / 42 * (1 - x2 / 72 * (1 - x2 / 110 * (1 - x2 / 156 * (1 - x2 / 210 * (1 - x2 / 272))))))));
+  }
+  const dcos = x => dsin(x + HPI);
+  function datan(z) {
+    const neg = z < 0; if (neg) z = -z;
+    const inv = z > 1; if (inv) z = 1 / z;
+    z = z / (1 + Math.sqrt(1 + z * z)); z = z / (1 + Math.sqrt(1 + z * z));
+    const z2 = z * z; let t = 1 / 23;
+    for (let k = 21; k >= 1; k -= 2) t = 1 / k - z2 * t;
+    let r = 4 * z * t; if (inv) r = HPI - r;
+    return neg ? -r : r;
+  }
+  const datan2 = (y, x) => x > 0 ? datan(y / x) : x < 0 ? datan(y / x) + (y >= 0 ? PI_ : -PI_) : y > 0 ? HPI : y < 0 ? -HPI : 0;
+  const dhypot = (...v) => Math.sqrt(v.reduce((n, a) => n + a * a, 0));
+  function nlRand() {
+    const a = NL.rs = (NL.rs + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), a | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  function detRun(fn) {
+    Object.assign(Math, { random: nlRand, sin: dsin, cos: dcos, atan2: datan2, hypot: dhypot });
+    try { fn(); } finally { Object.assign(Math, NATIVE); }
+  }
+
   // ---------------------------------------------------------- CARRERA A DOS (por Internet)
   // Los dos juegan el mismo nivel (misma semilla) a la vez, cada uno en su dispositivo, y ven
   // al otro como un fantasma. Antes de cada nivel se esperan; gana el nivel quien llega antes a la meta.
@@ -3368,7 +3931,9 @@
   const rivalName = () => R ? NAMES[R.rivalHero] : '';
   const rivalTxt = r => r && r.st === 'clear' && R.goals[r.lv] && R.goals[r.lv].rival && R.goals[r.lv].rival.forfeit ? 'no ha llegado a la meta'
     : r && r.ct > 0 && r.st !== 'clear' ? 'va por el ' + Math.round((r.pr || 0) * 100) + '% (le quedan ' + r.ct + ' s)' : Net.status === 'reconnecting' ? 'se ha cortado la conexión, reconectando...' : !Net.on ? 'se ha desconectado'  : !r ? 'se está conectando' : (RIVAL_TXT[r.st] || '').replace('{P}', Math.round((r.pr || 0) * 100));
-  function raceStart(m) { R.startMsg = m; G.diff = m.diff; R.seed = m.seed >>> 0; R.pendingStart = null; R.goals = {}; R.ready = R.rivalReady = -1; Sound.sfx.confirm(); startGame(); }
+  function raceStart(m) {
+    if (m.mode === 'coop') { Sound.sfx.confirm(); G.diff = m.diff; coopStart(m.heroes, true, m.seed >>> 0); return; }
+    R.startMsg = m; G.diff = m.diff; R.seed = m.seed >>> 0; R.pendingStart = null; R.goals = {}; R.ready = R.rivalReady = -1; Sound.sfx.confirm(); startGame(); }
   // gana el nivel quien llegó primero; si los dos avisos se cruzan por el camino, decide el tiempo de juego
   function raceWinner(lv) {
     const g = R && R.goals[lv]; if (!g) return null;
@@ -3395,8 +3960,9 @@
     }
   }
   Net.onMsg = m => {
+    if (CO && CO.net) { coopMsg(m); return; }
     if (!R) return;
-    if (m.t === 'hello') R.rivalHero = m.h === 'boy' ? 'boy' : 'girl';
+    if (m.t === 'hello') { R.rivalHero = m.h === 'boy' ? 'boy' : 'girl'; if (m.mode) R.mode = m.mode; if (m.picked) R.rivalPicked = true; }
     else if (m.t === 'start') { R.pendingStart = m; if (G.state === 'lobby' && G.sub === 'wait') raceStart(m); }
     else if (m.t === 'ready') R.rivalReady = m.lv;
     else if (m.t === 'goal') raceGoal('rival', m);
@@ -3407,9 +3973,10 @@
     }
   };
   Net.onStatus = st => {
+    if (CO && CO.net) { coopStatus(st); return; }
     if (!R) return;
     if (st === 'connected' && G.state === 'lobby' && G.sub !== 'wait') {
-      Sound.sfx.confirm(); Net.send({ t: 'hello', h: G.hero });
+      Sound.sfx.confirm(); Net.send({ t: 'hello', h: G.hero, mode: Net.isHost ? R.mode : undefined });
       G.state = 'select'; G.t = 0; G.menu = G.hero === 'boy' ? 0 : 1;
     } else if (st === 'connected') {
       // reconectados: se repite lo que el otro se pudo perder mientras tanto
@@ -3421,7 +3988,7 @@
       if (L && P && (G.state === 'play' || G.state === 'cutscene')) popText(P.x + P.w / 2, P.y - 40, 'SE HA CORTADO LA CONEXIÓN... RECONECTANDO', '#ffb060');
     } else if (st === 'lost' || st === 'error') {
       // antes de empezar se vuelve al menú; con la partida en marcha se sigue en solitario
-      if (['lobby', 'select', 'difficulty'].includes(G.state) && st === 'lost') { R = null; G.state = 'mode'; G.menu = 1; G.netMsg = Net.err; G.netMsgT = 300; }
+      if (['lobby', 'select', 'difficulty'].includes(G.state) && st === 'lost') { R = null; G.state = 'mode'; G.menu = 2; G.netMsg = Net.err; G.netMsgT = 300; }
       else if (L && (G.state === 'play' || G.state === 'cutscene')) popText(P.x + P.w / 2, P.y - 40, Net.err.toUpperCase(), '#ff8a8a');
     }
   };
@@ -3534,31 +4101,55 @@
   }
 
   // --- menú: uno o dos jugadores
-  const MODE_OPTS = [['1 JUGADOR', 'La aventura de siempre.'], ['2 JUGADORES: CREAR PARTIDA', 'Te damos un código para que tu rival se una.'], ['2 JUGADORES: UNIRSE', 'Escribe el código que te ha dado tu rival.']];
+  const MODE_OPTS = [['1 JUGADOR', 'La aventura de siempre.'], ['2 JUGADORES EN ESTA PANTALLA', 'Cooperativo: cada uno con su mando (o teclado y un mando).'],
+    ['2 JUGADORES POR INTERNET: CREAR', 'Carrera o cooperativo. Te damos un código para el otro.'], ['2 JUGADORES POR INTERNET: UNIRSE', 'Escribe el código que te han dado.']];
   function updateMode() {
     G.t++; if (G.netMsgT > 0) G.netMsgT--;
-    if (Input.pressed('up')) { G.menu = (G.menu + 2) % 3; Sound.sfx.select(); }
-    if (Input.pressed('down')) { G.menu = (G.menu + 1) % 3; Sound.sfx.select(); }
+    const n = MODE_OPTS.length;
+    if (Input.pressed('up')) { G.menu = (G.menu + n - 1) % n; Sound.sfx.select(); }
+    if (Input.pressed('down')) { G.menu = (G.menu + 1) % n; Sound.sfx.select(); }
     if (Input.backP()) { G.state = 'title'; G.t = 0; Sound.sfx.select(); return; }
     if (!Input.confirm()) return;
-    Sound.sfx.confirm(); G.t = 0; G.netMsgT = 0;
+    Sound.sfx.confirm(); G.t = 0; G.netMsgT = 0; G.duo = null;
     if (G.menu === 0) { G.state = 'select'; G.menu = G.hero === 'boy' ? 0 : 1; }
-    else if (G.menu === 1) { raceNew(); Net.host(); G.state = 'lobby'; G.sub = 'net'; }
+    else if (G.menu === 1) { G.duo = { step: 0, heroes: [] }; G.state = 'select'; G.menu = 0; }
+    else if (G.menu === 2) { G.state = 'netmode'; G.menu = 1; }
     else { G.state = 'join'; G.code = [1, 0, 0, 0]; G.menu = 0; codeInputReset(); }
+  }
+  // por Internet: ¿carrera o cooperativo?
+  const NETMODE_OPTS = [['CARRERA', 'El mismo nivel a la vez: gana quien llegue antes a la meta.'], ['COOPERATIVO', 'Los dos juntos en el mismo mundo contra los bichos.']];
+  function updateNetMode() {
+    G.t++;
+    if (Input.pressed('up') || Input.pressed('down')) { G.menu = 1 - G.menu; Sound.sfx.select(); }
+    if (Input.backP()) { G.state = 'mode'; G.menu = 2; Sound.sfx.select(); return; }
+    if (!Input.confirm()) return;
+    Sound.sfx.confirm(); raceNew(); R.mode = G.menu ? 'coop' : 'race'; Net.host(); G.state = 'lobby'; G.sub = 'net'; G.t = 0;
+  }
+  function drawNetMode() {
+    menuBg(0.6);
+    txt('¿A QUÉ QUERÉIS JUGAR?', W / 2, 20, { size: 16, align: 'center', col: '#ffe066' });
+    NETMODE_OPTS.forEach(([name, desc], i) => {
+      const sel = G.menu === i, y = 80 + i * 90;
+      glassBox(82, y, 476, 70, sel);
+      txt(name, 110, y + 16, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
+      txt(desc, 110, y + 44, { col: '#8affff' });
+      if (sel && G.t % 40 < 28) txt('>', 90, y + 18, { col: '#ffe066' });
+    });
+    txt(TCH() ? 'JOYSTICK elegir   TOCA / SALTO aceptar   PATADA volver' : 'ARRIBA/ABAJO elegir   ENTER/A aceptar   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
   }
   function menuBg(a) { if (photos.inicio) drawCover(photos.inicio); else drawParallaxBg(titleBg || 0, G.t * 0.6); ctx.fillStyle = `rgba(12,8,24,${a})`; ctx.fillRect(0, 0, W, H); }
   function drawMode() {
     menuBg(0.6);
     txt('¿CUÁNTOS JUGADORES?', W / 2, 20, { size: 16, align: 'center', col: '#ffe066' });
     MODE_OPTS.forEach(([name, desc], i) => {
-      const sel = G.menu === i, y = 56 + i * 76;
-      glassBox(82, y, 476, 64, sel);
-      txt(name, 110, y + 14, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
-      txt(desc, 110, y + 40, { col: '#8affff' });
-      if (sel && G.t % 40 < 28) txt('>', 90, y + 16, { col: '#ffe066' });
+      const sel = G.menu === i, y = 46 + i * 62;
+      glassBox(62, y, 516, 54, sel);
+      txt(name, 90, y + 12, { size: 16, col: sel ? '#ffe066' : '#c8c8e0' });
+      txt(desc, 90, y + 34, { col: '#8affff' });
+      if (sel && G.t % 40 < 28) txt('>', 70, y + 14, { col: '#ffe066' });
     });
-    if (G.netMsgT > 0) txt(G.netMsg, W / 2, 294, { align: 'center', col: '#ff8a8a' });
-    txt('A dos: cada uno en su móvil, tablet u ordenador, con Internet', W / 2, 314, { align: 'center', col: '#ff8ab0' });
+    if (G.netMsgT > 0) txt(G.netMsg, W / 2, 296, { align: 'center', col: '#ff8a8a' });
+    txt(G.menu === 1 ? (Input.pads >= 1 ? 'Mandos conectados: ' + Input.pads : 'Conecta un mando para el jugador 2 (el 1 puede usar el teclado)') : 'Por Internet: cada uno en su móvil, tablet u ordenador', W / 2, 314, { align: 'center', col: '#ff8ab0' });
     txt(TCH() ? 'JOYSTICK elegir   TOCA / SALTO aceptar   PATADA volver' : 'ARRIBA/ABAJO elegir   ENTER/A aceptar   C/B volver', W / 2, 340, { align: 'center', col: '#c8c8e0' });
   }
 
@@ -3595,7 +4186,7 @@
     if (Input.pressed('down')) { G.code[G.menu] = (G.code[G.menu] + 9) % 10; Sound.sfx.select(); }
     if (Input.pressed('right') && G.menu < 3) { G.menu++; Sound.sfx.select(); }
     if (Input.pressed('left') && G.menu > 0) { G.menu--; Sound.sfx.select(); }
-    if (Input.backP()) { if (G.menu > 0 && !TCH()) G.menu--; else { G.state = 'mode'; G.menu = 2; } Sound.sfx.select(); return; }
+    if (Input.backP()) { if (G.menu > 0 && !TCH()) G.menu--; else { G.state = 'mode'; G.menu = 3; } Sound.sfx.select(); return; }
     if (Input.pressed('jump') || Input.pressed('punch') || Input.pressed('start')) joinGo();
   }
   function drawJoin() {
@@ -3620,7 +4211,7 @@
     G.t++;
     if (G.sub === 'wait' && R && R.pendingStart) { raceStart(R.pendingStart); return; }
     if (Input.backP() || (Net.status === 'error' && Input.confirm())) {
-      Sound.sfx.select(); const host = Net.isHost; raceQuit(); G.state = 'mode'; G.menu = host ? 1 : 2; G.t = 0;
+      Sound.sfx.select(); const host = Net.isHost; raceQuit(); G.state = 'mode'; G.menu = host ? 2 : 3; G.t = 0;
     }
   }
   function drawLobby() {
@@ -3633,9 +4224,9 @@
     } else if (G.sub === 'wait') {
       drawChar(G.hero, IDLE[Math.floor(G.t / 12) % 4], W / 2 - 90, 220, 1, 1);
       drawChar(R.rivalHero, IDLE[Math.floor(G.t / 12 + 2) % 4], W / 2 + 90, 220, -1, 1);
-      txt('VS', W / 2, 160, { size: 24, align: 'center', col: '#ff8ab0' });
+      txt(R.mode === 'coop' ? '+' : 'VS', W / 2, 160, { size: 24, align: 'center', col: '#ff8ab0' });
       txt('¡Conectados!', W / 2, 60, { size: 16, align: 'center', col: '#8aff8a' });
-      txt('Tu rival está eligiendo la dificultad' + dots, W / 2, 256, { align: 'center', col: '#ffffff' });
+      txt((R.mode === 'coop' ? 'Tu compañero' : 'Tu rival') + ' está eligiendo la dificultad' + dots, W / 2, 256, { align: 'center', col: '#ffffff' });
     } else if (Net.isHost && st === 'hosting') {
       txt('TU CÓDIGO', W / 2, 64, { align: 'center', col: '#c8c8e0' });
       glassBox(W / 2 - 130, 80, 260, 70, true);
@@ -3696,7 +4287,8 @@
     txt(loc.name, W / 2, 84, { size: nameSize, align: 'center', col: '#ffe066' });
     wrap(loc.sub, 56).forEach((l, i) => txt(l, W / 2, 124 + i * 14, { align: 'center', col: '#ffffff' }));
     drawPresenter([15, 5, 6, 7, 8, 9, 10, 11][G.levelIdx] ?? 14, 30, 182, 104, { t: G.t - 10 });
-    drawChar(G.hero, WALK[Math.floor(G.t / 5) % 8], W / 2 - 50, 270, 1, 1);
+    if (PL) PL.forEach((q, i) => { if (!q.gone) drawChar(q.hero, WALK[Math.floor(G.t / 5 + i * 3) % 8], W / 2 - 50 - i * 40, 270, 1, 1, i && PL[0].hero === q.hero ? 'alt' : null); });
+    else drawChar(G.hero, WALK[Math.floor(G.t / 5) % 8], W / 2 - 50, 270, 1, 1);
     txt('x ' + G.lives, W / 2 + 10, 240, { size: 16 });
     txt('Bichos de la zona:', W / 2, 280, { align: 'center', col: '#8affff' });
     const kinds = [...new Set(loc.enemies)];
@@ -3761,7 +4353,7 @@
   }
   function updateGameover() {
     G.t++;
-    if (G.t > 60 && (Input.pressed('start') || (TCH() && G.t < 660 && Input.confirm()))) {
+    if (G.t > 60 && (Input.pressed('start') || ((TCH() || CO) && G.t < 660 && Input.confirm()))) {
       G.lives = 5; G.score = 0;
       const g = R && R.goals[G.levelIdx];
       if (g && g.rival && !g.rival.forfeit) raceForfeit('time'); else startLevelIntro();
@@ -3786,7 +4378,50 @@
   }
 
   const MEDAL_T0 = 20 + 6 * 14 + 10;
+  // Resumen del equipo: cada fila da un título (en canario) al que más tenga
+  const DUO_ROWS = [
+    ['coins', 'Pesetas', 'EL MÁS RUIN', 'LA MÁS RUIN'],
+    ['kills', 'Bichos vencidos', "ECHADO PA'LANTE", "ECHADA PA'LANTE"],
+    ['letters', 'Letras MACHÍN', 'EL MÁS JURUNGÓN', 'LA MÁS JURUNGONA'],
+    ['rescues', 'Rescates', 'EL MÁS APAÑADO', 'LA MÁS APAÑADA'],
+    ['aupas', 'Aúpas dados', 'EL ASCENSOR HUMANO', 'LA ESCALERA HUMANA'],
+    ['hits', 'Golpes recibidos', 'MACHANGO DEL NIVEL', 'MACHANGA DEL NIVEL'],
+    ['deaths', 'Caídas', 'EL MÁS TOLETE', 'LA MÁS TOLETE'],
+  ];
+  function duoTitles() {
+    const out = [[], []];
+    for (const [k, , m, f] of DUO_ROWS) {
+      const a = L.st[0][k], b = L.st[1][k]; if (a === b) continue;
+      const w = a > b ? 0 : 1; out[w].push(PL[w].hero === 'girl' ? f : m);
+    }
+    return out;
+  }
+  function drawDuoSummary() {
+    const t = L.duoT, n = DUO_ROWS.length;
+    ctx.fillStyle = 'rgba(12,8,24,0.86)'; ctx.fillRect(0, 0, W, H);
+    txt('¿QUIÉN HA HECHO QUÉ?', W / 2, 22, { size: 16, align: 'center', col: '#ffe066' });
+    const titles = duoTitles(), xs = [150, W - 150], showT = t > 12 * n + 20;
+    PL.forEach((q, i) => {
+      const x = xs[i], col = i ? '#8affff' : '#ffe066';
+      drawChar(q.hero, showT ? winFrame(t + i * 20) : IDLE[Math.floor(t / 12) % 4], x, 104, i ? -1 : 1, 1, i && PL[0].hero === q.hero ? 'alt' : null);
+      txt((i + 1) + 'P  ' + NAMES[q.hero].toUpperCase(), x, 110, { align: 'center', col });
+      if (!showT) return;
+      const list = titles[i].length ? titles[i].slice(0, 4) : ['NI FU NI FA'];
+      list.forEach((s, k) => { const a = Math.min(1, (t - 12 * n - 20 - k * 8) / 8); if (a > 0) txt(s, x, 126 + k * 12, { align: 'center', col: '#ff8ab0', alpha: a }); });
+    });
+    DUO_ROWS.forEach(([k, label], r) => {
+      if (t < 12 * (r + 1)) return;
+      const y = 172 + r * 17, a = L.st[0][k], b = L.st[1][k];
+      if (r % 2 === 0) { ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fillRect(60, y - 4, W - 120, 16); }
+      txt(label, W / 2, y, { align: 'center', col: '#c8c8e0' });
+      txt(String(a), xs[0], y, { align: 'center', col: a > b ? '#ffe066' : '#ffffff' });
+      txt(String(b), xs[1], y, { align: 'center', col: b > a ? '#8affff' : '#ffffff' });
+    });
+    if (t > 12 * n) txt('Ataques combinados del equipo: ' + (L.combos || 0), W / 2, 172 + n * 17 + 6, { align: 'center', col: '#ff8ab0' });
+    if (t > 60 && t % 60 < 40) txt(TCH() ? 'TOCA LA PANTALLA' : 'PULSA ENTER / A', W / 2, 340, { align: 'center', col: '#ffffff' });
+  }
   function drawClear() {
+    if (L.duoT !== undefined && L.st && PL) { drawDuoSummary(); return; }
     ctx.fillStyle = 'rgba(12,8,24,0.72)'; ctx.fillRect(0, 0, W, H);
     txt(L.forfeit === 'time' ? '¡SE ACABÓ EL TIEMPO!' : L.forfeit ? '¡TE HAS RENDIDO!' : '¡' + L.loc.short.toUpperCase() + ' SUPERADO!', W / 2, 50, { size: 16, align: 'center', col: '#ffe066' });
     txt(fill('...pero ' + (L.nick || CAT) + ' se ha escapado con {C}', G.C), W / 2, 80, { align: 'center', col: '#ff8ab0' });
@@ -3795,6 +4430,7 @@
     rows.forEach(([k, v], i) => { if (G.t > 20 + i * 14) { txt(k, 190, 100 + i * 18); txt(String(v), 490, 100 + i * 18, { align: 'right', col: '#8affff' }); } });
     drawPresenter(12, 24, 110, 110, { t: G.t - 40 });
     drawChar(G.hero, L.forfeit ? IDLE[Math.floor(G.t / 12) % 4] : G.t < 40 ? WIN[1] : winFrame(G.t), 580, 236, -1, 1);
+    if (PL && !PL[1].gone) drawChar(PL[1].hero, G.t < 40 ? WIN[1] : winFrame(G.t + 20), 545, 236, -1, 1, PL[0].hero === PL[1].hero ? 'alt' : null);
     txt('PUNTUACIÓN  ' + String(G.score).padStart(7, '0'), W / 2, 214, { size: 16, align: 'center' });
     if (R && G.t > 20) {
       const w = raceWinner(G.levelIdx), tally = '   TÚ ' + raceWins('me') + ' - ' + raceWins('rival') + ' ' + rivalName();
@@ -3847,21 +4483,23 @@
   // Al tumbar a un jefe: el juego va a cámara lenta, la cámara se acerca al golpe final, bandas de cine y confeti.
   const SLOW_DUR = 140, CONFETTI = ['#ff4a6a', '#ffe066', '#4ad0ff', '#8aff8a', '#ff8ab0', '#ffffff', '#b07aff'];
   const slowBuf = document.createElement('canvas'); slowBuf.width = W; slowBuf.height = H; const slowCtx = slowBuf.getContext('2d');
-  function startSlowmo(x, y, label) {
-    G.slow = { t: 0, x, y, label };
+  // o.dur: fotogramas que dura; o.quick: sin confeti (el ataque combinado)
+  function startSlowmo(x, y, label, o = {}) {
+    G.slow = { t: 0, x, y, label, dur: o.dur || SLOW_DUR };
     L.shake = Math.min(L.shake, 6);
-    for (let i = 0; i < 110; i++) L.parts.push({ x: L.camX + rand(-20, VW + 20), y: L.camY - rand(0, 90), vx: rand(-0.6, 0.6), vy: rand(0, 1), life: rand(200, 300), col: pick(CONFETTI), s: rand(3, 5), g: 0.03, conf: true, ph: rand(0, 6) });
+    if (!o.quick) for (let i = 0; i < 110; i++) L.parts.push({ x: L.camX + rand(-20, VW + 20), y: L.camY - rand(0, 90), vx: rand(-0.6, 0.6), vy: rand(0, 1), life: rand(200, 300), col: pick(CONFETTI), s: rand(3, 5), g: 0.03, conf: true, ph: rand(0, 6) });
   }
   // ¿toca actualizar en este fotograma? (a 1/4 de velocidad y luego a 1/2 mientras dura)
   function slowTick() {
     const sl = G.slow; if (!sl) return true;
-    if (++sl.t >= SLOW_DUR) { G.slow = null; return true; }
-    return sl.t % (sl.t < SLOW_DUR * 0.65 ? 4 : 2) === 0;
+    const dur = sl.dur || SLOW_DUR;
+    if (++sl.t >= dur) { G.slow = null; return true; }
+    return sl.t % (sl.t < dur * 0.65 ? 4 : 2) === 0;
   }
   function drawSlowmo() {
     const sl = G.slow; if (!sl || !L) return;
-    const k = Math.max(0, Math.min(1, sl.t / 14, (SLOW_DUR - sl.t) / 30)), e = k * k * (3 - 2 * k), z = 1 + 0.3 * e;
-    const fx = Math.max(0, Math.min(W, (sl.x - L.camX) * Z)), fy = Math.max(0, Math.min(H, (sl.y - L.camY) * Z));
+    const k = Math.max(0, Math.min(1, sl.t / 14, ((sl.dur || SLOW_DUR) - sl.t) / 30)), e = k * k * (3 - 2 * k), z = 1 + 0.3 * e;
+    const fx = Math.max(0, Math.min(W, (sl.x - L.camX) * ZC)), fy = Math.max(0, Math.min(H, (sl.y - L.camY) * ZC));
     slowCtx.clearRect(0, 0, W, H); slowCtx.drawImage(cv, 0, 0, W, H);
     ctx.drawImage(slowBuf, fx * (1 - z), fy * (1 - z), W * z, H * z);
     if (sl.t < 6) { ctx.fillStyle = `rgba(255,255,255,${0.75 * (1 - sl.t / 6)})`; ctx.fillRect(0, 0, W, H); }
@@ -3870,13 +4508,22 @@
   }
 
   // ---------------------------------------------------------- BUCLE PRINCIPAL
+  // teclas que sólo afectan a este dispositivo (música y pantalla completa)
+  function localKeys() {
+    if (Input.localP('mute')) Sound.toggleMusic();
+    if (Input.localP('full')) { try { if (window.toggleFullscreen) toggleFullscreen(); else if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen(); } catch (e) {} }
+  }
   function update() {
-    Input.poll();
-    if (Input.pressed('mute')) Sound.toggleMusic();
-    if (Input.pressed('full')) { try { if (window.toggleFullscreen) toggleFullscreen(); else if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen(); } catch (e) {} }
+    // en el cooperativo por Internet el mando ya viene puesto (lo de los dos, fotograma a fotograma)
+    if (!NL.on) {
+      if (CO && CO.net) { const s = Input.local(); Input.apply(CO.me ? [{}, s.all] : [s.all, {}]); }
+      else Input.poll(!!CO);
+      localKeys();
+    }
     switch (G.state) {
-      case 'title': if (R) raceQuit(); updateTitle(); break;
+      case 'title': if (R) raceQuit(); if (CO) coopQuit(); updateTitle(); break;
       case 'mode': updateMode(); break;
+      case 'netmode': updateNetMode(); break;
       case 'join': updateJoin(); break;
       case 'lobby': updateLobby(); break;
       case 'select': updateSelect(); break;
@@ -3901,6 +4548,7 @@
       case 'loading': ctx.fillStyle = '#0c0818'; ctx.fillRect(0, 0, W, H); txt('CARGANDO...', W / 2, H / 2, { align: 'center' }); break;
       case 'title': drawTitle(); break;
       case 'mode': drawMode(); break;
+      case 'netmode': drawNetMode(); break;
       case 'join': drawJoin(); break;
       case 'lobby': drawLobby(); break;
       case 'select': drawSelect(); break;
@@ -3917,12 +4565,18 @@
         if (G.state === 'ending') drawEnding();
         break;
     }
+    // cooperativo por Internet: si el otro no llega, se espera
+    if (NL.on && NL.stallT > 40) {
+      ctx.fillStyle = 'rgba(12,8,24,0.55)'; ctx.fillRect(0, H / 2 - 22, W, 44);
+      txt(Net.status === 'reconnecting' ? 'SE HA CORTADO LA CONEXIÓN... RECONECTANDO' : NL.syncAt !== null ? 'SINCRONIZANDO...' : 'ESPERANDO A ' + NAMES[CO.heroes[1 - CO.me]] + '...', W / 2, H / 2 - 8, { size: 16, align: 'center', col: '#ffe066' });
+      if (NL.stallT > 600) txt((TCH() ? 'PATADA' : 'C/B') + ': seguir sin ' + NAMES[CO.heroes[1 - CO.me]], W / 2, H / 2 + 12, { align: 'center', col: '#ffffff' });
+    }
   }
   let acc = 0, last = performance.now();
   function frame(now) {
     acc += Math.min(100, now - last); last = now;
     let n = 0;
-    while (acc >= 1000 / 60 && n < 5) { if (!window.__freeze && slowTick()) update(); acc -= 1000 / 60; n++; }
+    while (acc >= 1000 / 60 && n < 5) { if (NL.on) netTick(); else if (!window.__freeze && slowTick()) update(); acc -= 1000 / 60; n++; }
     render();
     requestAnimationFrame(frame);
   }
@@ -3947,7 +4601,7 @@
     for (const k of ['peseta', 'bocadillo', 'mojo', 'turron', 'tortilla', 'churro', 'chancla', 'corazon']) if (elem(k)) Art.itemSprites[k] = elem(k);
     G.state = 'title'; G.t = 0;
     // depuración: ?nivel=N (1..n) salta directamente al nivel N; opcionales &dificultad=facil|normal|dificil y &heroe=boy|girl
-    window.__game = { G, get L() { return L; }, get P() { return P; }, Level, mk: (k, c, r) => makeEnemy(k, c, r), step(n = 1) { for (let i = 0; i < n; i++) update(); render(); return G.state; }, hold(a, v = true) { Input.virt[a] = v; }, tap(a) { Input.virt[a] = true; update(); Input.virt[a] = false; update(); render(); }, jump(i, diff = 'normal', hero = 'boy') { G.diff = diff; D = DIFFICULTY[diff]; G.hero = hero; G.levelIdx = i; startLevelIntro(); } };
+    window.__game = { G, get L() { return L; }, get P() { return P; }, Level, mk: (k, c, r) => makeEnemy(k, c, r), step(n = 1) { for (let i = 0; i < n; i++) update(); render(); return G.state; }, hold(a, v = true) { Input.virt[a] = v; }, hold2(a, v = true) { Input.virt2[a] = v; }, get PL() { return PL; }, get NL() { return NL; }, hash: () => simHash(), snapSize: () => JSON.stringify(takeSnap()).length, ntick(n = 1) { for (let i = 0; i < n; i++) if (NL.on) netTick(); render(); return NL.frame; }, get ZC() { return ZC; }, coop(h1 = 'boy', h2 = 'girl', diff = 'normal', lvl = 0) { G.diff = diff; D = DIFFICULTY[diff]; CO = { heroes: [h1, h2], net: false, me: 0, gone: null }; G.hero = h1; G.lives = 5; G.levelIdx = lvl; startLevelIntro(); }, tap(a) { Input.virt[a] = true; update(); Input.virt[a] = false; update(); render(); }, jump(i, diff = 'normal', hero = 'boy') { G.diff = diff; D = DIFFICULTY[diff]; G.hero = hero; G.levelIdx = i; startLevelIntro(); } };
     const q = new URLSearchParams(location.search), nq = q.get('nivel') ?? q.get('test');
     if (nq !== null) {
       const n = Math.max(1, Math.min(LOCATIONS.length, parseInt(nq, 10) || 1));

@@ -3,6 +3,8 @@
 //  tiles texturizados y fondos detallados estilo recreativa 90s
 // ============================================================
 const Art = (() => {
+  // copia propia de Math: en el cooperativo por Internet el juego cambia Math.random/sin/cos mientras simula, y esto no debe notarlo
+  const Math = Object.getOwnPropertyNames(globalThis.Math).reduce((m, k) => (m[k] = globalThis.Math[k], m), {});
   const PAL = {
     k: '#1b1426', w: '#ffffff', g: '#a9a9bd', G: '#5d5d73', r: '#e0303a', R: '#8e1a24', o: '#f08a24', y: '#ffd23f',
     Y: '#c89a12', b: '#a8693a', B: '#5e3a1e', c: '#f5dcb0', p: '#f59ab8', P: '#8a3fb8', e: '#58c84a', E: '#1e7a32',

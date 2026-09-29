@@ -109,7 +109,8 @@ const CITY_FOOD = ['cafe', 'gazpacho', 'paella', 'cocido', 'paella', 'cafe', 'co
 const Level = (() => {
   function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
-  function build(locIdx, D, seed, isFinal) {
+  // coop: partida a dos (azoteas para el aúpa y reja con dos botones antes del mini-jefe)
+  function build(locIdx, D, seed, isFinal, coop = false) {
     const R = rng(seed), ri = (a, b) => a + Math.floor(R() * (b - a + 1)), loc = LOCATIONS[locIdx];
     const bodyLen = D.len, extra = isFinal ? 46 : 34;
     let cols = bodyLen + 140;
@@ -135,7 +136,8 @@ const Level = (() => {
     // "virtuales" para el validador: por donde pasa una plataforma se puede ir de pie.
     const objs = [], vsegs = [], hot = [];
     const vseg = (r, c0, c1) => vsegs.push({ r, c0, c1, plat: true });
-    let pipe = null, botijos = 0, hiddens = 0;
+    let pipe = null, botijos = 0, hiddens = 0, ante = null, plates = null;
+    const aupas = [];
     const TR = {
       // foso con plataformas que se caen al pisarlas
       cae() {
@@ -183,12 +185,36 @@ const Level = (() => {
       },
       // entrada a la sala secreta (cubo, bota, hoyo de golf... según el sitio): una por nivel
       tuberia() {
+        // a dos, la entrada está en lo alto de una azotea
+        if (coop && !pipe) { TR.azotea(true); return; }
         const n = ri(7, 9), s = c; flat(n);
         if (pipe) return;
         const pc = s + 3;
         tiles[h - 1][pc] = tiles[h - 1][pc + 1] = tiles[h - 2][pc] = tiles[h - 2][pc + 1] = PIPE;
         pipe = { c: pc, r: h - 2 };
         coin(pc, h - 4); coin(pc + 1, h - 4);
+      },
+      // cooperativo: azotea demasiado alta para un salto normal (hay que auparse sobre el compañero)
+      azotea(withPipe = false) {
+        if (h < 11 || withPipe) { h = withPipe ? 12 : ri(11, 12); flat(2); }
+        const n = ri(11, 13), s = c; flat(n);
+        const pr = h - 8, p0 = s + 4, w = withPipe ? 5 : ri(4, 5);
+        for (let i = 0; i < w; i++) { tiles[pr][p0 + i] = PLAT; coin(p0 + i, pr - 1); }
+        if (withPipe) {
+          const pc = p0 + 2;
+          tiles[pr - 1][pc] = tiles[pr - 1][pc + 1] = tiles[pr - 2][pc] = tiles[pr - 2][pc + 1] = PIPE;
+          pipe = { c: pc, r: pr - 2 };
+          coins.splice(coins.length - 3, 2); // las dos monedas que quedaban dentro de la tubería
+        } else hot.push({ col: p0 + (w >> 1), row: pr - 1, top: true });
+        aupas.push({ c: p0, r: pr, w });
+      },
+      // cooperativo: antesala del mini-jefe con dos botones; uno está en un saliente al que solo se llega con un aúpa
+      antesala() {
+        const s = c; flat(12);
+        const lr = h - 5;
+        for (let i = 2; i <= 4; i++) tiles[lr][s + i] = PLAT;
+        plates = [{ c: s + 3, r: lr }, { c: s + 9, r: h }];
+        ante = s;
       },
       // Las Palmas: la marea sube y baja e inunda la hondonada
       marea() {
@@ -327,6 +353,7 @@ const Level = (() => {
     [0.12, 0.3, 0.58, 0.86].forEach((f, i) => { if (local.length) sched.push({ at: Math.floor(bodyLen * f), k: local[i % local.length] }); });
     [[0.2, 'cae'], [0.34 + R() * 0.1, 'tuberia'], [0.46, 'mov'], [0.64, 'muelle'], [0.93, R() < 0.5 ? 'ascensor' : 'cae']]
       .forEach(([f, k]) => sched.push({ at: Math.floor(bodyLen * f), k }));
+    if (coop) [0.25, 0.55, 0.9].forEach(f => sched.push({ at: Math.floor(bodyLen * f), k: 'azotea' }));
     sched.sort((a, b) => a.at - b.at);
     flat(12);
     let checkpointX = null, miniCol = null;
@@ -334,7 +361,7 @@ const Level = (() => {
     while (c < bodyLen) {
       if (checkpointX === null && c >= checkAt) { const s = c; flat(7); checkpointX = (s + 3) * TILE; continue; }
       // arena del mini-jefe: suelo llano y despejado entre dos rejas
-      if (miniCol === null && c >= miniAt) { miniCol = c; flat(MINI_W); continue; }
+      if (miniCol === null && c >= miniAt) { if (coop && ante === null) { TR.antesala(); continue; } miniCol = c; flat(MINI_W); continue; }
       if (sched.length && c >= sched[0].at) { TR[sched.shift().k](); continue; }
       const roll = R();
       let acc = 0;
@@ -460,6 +487,7 @@ const Level = (() => {
       if (i === roomLetter) { letters.push({ i, col: room.c0 + 11, row: 6 }); continue; }
       const a = lo + span * i, b = a + span, inB = p => p.col >= a && p.col < b && okSpot(p);
       let pool = hot.filter(inB), fromCoins = false;
+      if (pool.some(p => p.top)) pool = pool.filter(p => p.top); // a dos, mejor en lo alto de una azotea
       if (!pool.length) { pool = coins.filter(inB); fromCoins = true; }
       if (pool.length) {
         const p = pool[Math.floor(R() * pool.length)];
@@ -475,7 +503,7 @@ const Level = (() => {
         if (g > 3 && okSpot({ col: cc, row: g - 3 }) && okSpot({ col: cc, row: g - 1 })) { letters.push({ i, col: cc, row: g - 3 }); break; }
       }
     }
-    const L = { locIdx, cols, mainCols, tiles, contents, coins, spawns, checkpointX, goalStart, isFinal, seed, miniCol, objs, vsegs, pipe, room, letters };
+    const L = { locIdx, cols, mainCols, tiles, contents, coins, spawns, checkpointX, goalStart, isFinal, seed, miniCol, objs, vsegs, pipe, room, letters, aupas, plates };
     if (isFinal) {
       L.arenaStart = goalStart + 12;
       const A = L.arenaStart;
@@ -499,7 +527,7 @@ const Level = (() => {
     L.food = CITY_FOOD[locIdx];
     if (L.food) ensurePower(L, R, 16, miniCol !== null ? miniCol - 1 : goalStart - 2, [L.food], [L.food]);
     // no dejar enemigos en la zona final
-    L.spawns = L.spawns.filter(s => s.col < goalStart - 2 && s.col > 14 && (miniCol === null || s.col < miniCol - 2 || s.col > miniCol + MINI_W + 1));
+    L.spawns = L.spawns.filter(s => s.col < goalStart - 2 && s.col > 14 && (miniCol === null || s.col < (ante !== null ? ante : miniCol - 2) || s.col > miniCol + MINI_W + 1));
     return L;
   }
 
@@ -571,14 +599,14 @@ const Level = (() => {
     return false;
   }
 
-  function generate(locIdx, diffKey, seed, isFinal) {
+  function generate(locIdx, diffKey, seed, isFinal, coop = false) {
     const D = DIFFICULTY[diffKey];
     for (let i = 0; i < 80; i++) {
-      const L = build(locIdx, D, seed + i * 7919, isFinal);
+      const L = build(locIdx, D, seed + i * 7919, isFinal, coop);
       if (validate(L)) { L.attempts = i + 1; return L; }
     }
     // Plan B (nunca debería ocurrir): nivel sin huecos
-    return build(locIdx, Object.assign({}, D, { pitRate: 0, maxGap: 2 }), seed, isFinal);
+    return build(locIdx, Object.assign({}, D, { pitRate: 0, maxGap: 2 }), seed, isFinal, coop);
   }
   return { generate, validate, build };
 })();
